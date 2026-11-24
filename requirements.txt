@@ -1,0 +1,11 @@
+mss>=9.0
+Pillow>=10.0
+numpy>=1.24
+pynput>=1.7
+pyperclip>=1.8
+cryptography>=41.0
+customtkinter>=5.2
+av>=12.0
+soundcard>=0.4.3
+pystray>=0.19; sys_platform == "win32"
+pywin32>=306; sys_platform == "win32"

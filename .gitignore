@@ -1,0 +1,8 @@
+build/
+dist/
+.build-venv/
+.venv/
+__pycache__/
+*.spec
+PilotDesk.exe
+relay_ids.json
