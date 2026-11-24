@@ -1276,6 +1276,10 @@ def run_gui(cfg, minimized):
 
 
 def main():
+    if sys.stdout is None:  # wersja .exe bez konsoli – print() nie może się wywracać
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
     argv = sys.argv[1:]
     # tryby wewnętrzne (usługa Windows, agent, instalacja z uprawnieniami administratora, aktualizacje)
     if argv[:1] == ["--service"]:

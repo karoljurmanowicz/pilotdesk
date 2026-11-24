@@ -1,11 +1,13 @@
-# Automatyczne budowanie PilotDesk.exe na serwerach GitHuba (za darmo).
-# Gotowy plik: zakładka Actions -> ostatnie uruchomienie -> Artifacts -> PilotDesk-windows.
-# Po wypchnięciu taga (np. v2.0) plik trafia też do zakładki Releases.
+# Automatyczne budowanie i publikowanie PilotDesk.exe na serwerach GitHuba (za darmo).
+#
+# Każdy push na gałąź main:
+#   1. buduje PilotDesk.exe (+ sumę kontrolną PilotDesk.exe.sha256),
+#   2. publikuje wydanie „v<VERSION>” w zakładce Releases (VERSION z pliku pd_common.py).
+# Programy na Twoich komputerach pobierają nową wersję, gdy VERSION wzrośnie.
 name: Build PilotDesk.exe
 on:
   push:
-    branches: [main, master]
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: write
@@ -17,18 +19,39 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Odczytaj wersję
+        id: ver
+        shell: bash
+        run: |
+          v=$(python -c "import re;print(re.search(r'^VERSION = \"(.+?)\"', open('pd_common.py', encoding='utf-8').read(), re.M).group(1))")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Wersja: $v"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt pyinstaller
       - run: python build_exe.py
+      - name: Test uruchomienia (bez okna)
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/pdhome"
+          USERPROFILE="$RUNNER_TEMP/pdhome" ./dist/PilotDesk.exe --show-id
+          echo "kod wyjścia: $?"
+          test -f "$RUNNER_TEMP/pdhome/.pilotdesk.json" && echo "konfiguracja utworzona – program startuje poprawnie"
       - uses: actions/upload-artifact@v4
         with:
           name: PilotDesk-windows
           path: |
             dist/PilotDesk.exe
             dist/PilotDesk.exe.sha256
-      - if: startsWith(github.ref, 'refs/tags/')
+      - name: Opublikuj wydanie
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: PilotDesk ${{ steps.ver.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          body: |
+            Pobierz **PilotDesk.exe**, uruchom i kliknij „Zainstaluj”.
+            Zainstalowane programy zaktualizują się same.
           files: |
             dist/PilotDesk.exe
             dist/PilotDesk.exe.sha256

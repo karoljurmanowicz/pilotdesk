@@ -7,8 +7,8 @@ Program to jeden plik **PilotDesk.exe**, który przy pierwszym uruchomieniu sam 
 
 1. **Zbuduj PilotDesk.exe (jeden raz).** Kliknij dwukrotnie `ZBUDUJ_PILOTDESK_EXE.bat`. Jeśli nie masz
    Pythona, skrypt sam go pobierze.
-   Możesz też zlecić to GitHubowi: wrzuć ten folder do repozytorium, a `.github/workflows/build.yml`
-   zbuduje plik automatycznie (Actions → Artifacts; po tagu `v3.0` także w zakładce Releases).
+   Najprościej: pobierz gotowy plik z https://github.com/karoljurmanowicz/pilotdesk/releases/latest
+   (GitHub buduje go automatycznie po każdej zmianie w repozytorium).
 2. **Na każdym komputerze** kliknij dwukrotnie `PilotDesk.exe` i wybierz **Zainstaluj**. Dostaniesz
    skrót na pulpicie, wpis w menu Start, start razem z Windows i wpis w Ustawienia → Aplikacje.
    Nie są potrzebne uprawnienia administratora.
@@ -65,8 +65,8 @@ komputer w domu).
 
 ## Automatyczne aktualizacje
 
-1. Opublikuj nową wersję jako GitHub Release. Po wypchnięciu taga `v3.1` workflow sam dołączy
-   `PilotDesk.exe` i `PilotDesk.exe.sha256`.
+1. Podnieś `VERSION` w `pd_common.py` (np. na `"3.1"`) i wyślij zmianę na gałąź `main`. GitHub sam
+   zbuduje `PilotDesk.exe` i opublikuje wydanie `v3.1` w zakładce Releases (razem z sumą kontrolną).
 2. Domyślnym źródłem jest repozytorium `karoljurmanowicz/pilotdesk` (można je zmienić w **Ustawienia → Aktualizacje**).
 
 Program sprawdza aktualizacje przy starcie i co 12 godzin. Nową wersję instaluje, gdy nie trwa żadna
