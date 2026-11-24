@@ -1,0 +1,116 @@
+"""Punkt startowy PilotDesk.exe.
+
+Łapie każdy błąd startu i zapisuje go do pliku %LOCALAPPDATA%\\PilotDesk\\error.log (Linux/macOS:
+~/.local/share/pilotdesk/error.log), zamiast pokazywać okno błędu, które w usłudze lub na serwerze
+budującym nie miałby kto zamknąć.
+
+  PilotDesk.exe --selftest PLIK.json   sprawdza, czy wszystkie moduły się ładują (używane przez GitHub Actions)
+"""
+import json
+import os
+import sys
+import time
+import traceback
+
+
+def log_dir():
+    if sys.platform == "win32":
+        d = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "PilotDesk")
+    else:
+        d = os.path.join(os.path.expanduser("~"), ".local", "share", "pilotdesk")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def write_error(tb):
+    try:
+        path = os.path.join(log_dir(), "error.log")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')}  {' '.join(sys.argv)}\n{tb}")
+        return path
+    except Exception:
+        return ""
+
+
+def selftest(out):
+    """Ładuje wszystkie moduły i sprawdza najważniejsze możliwości. Zapisuje raport JSON."""
+    report = {"ok": True, "modules": {}, "python": sys.version}
+    mods = ["pd_common", "pd_install", "pd_theme", "pd_ui", "pd_host", "pd_viewer", "pd_media", "pd_clipfiles",
+            "pd_winutil", "pd_update", "pd_service", "customtkinter", "mss", "numpy", "PIL.ImageTk", "pynput",
+            "pyperclip", "cryptography", "av"]
+    if sys.platform == "win32":
+        mods += ["pystray", "soundcard", "win32serviceutil", "servicemanager", "win32ts", "win32profile",
+                 "win32security", "win32process"]
+    for m in mods:
+        try:
+            __import__(m)
+            report["modules"][m] = "ok"
+        except Exception as e:
+            report["modules"][m] = f"BŁĄD: {e.__class__.__name__}: {e}"
+            report["ok"] = False
+    try:
+        import pd_media
+        report["h264_encoder"] = pd_media.h264_encoder_name()
+        report["h264_decoder"] = pd_media.h264_decoder_ok()
+        report["opus"] = pd_media.opus_ok()
+        if report["h264_encoder"]:
+            import numpy as np
+            enc = pd_media.VideoEncoder(640, 360, 30, 1_000_000)
+            data, key = enc.encode(np.zeros((360, 640, 3), dtype=np.uint8))
+            dec = pd_media.VideoDecoder()
+            img = dec.decode(data)
+            report["h264_roundtrip"] = bool(key and img is not None and img.size == (640, 360))
+    except Exception as e:
+        report["media_error"] = str(e)
+        report["ok"] = False
+    try:
+        import pd_theme
+        report["fonts_bundled"] = os.path.isdir(pd_theme.resource("fonts"))
+        report["ok"] &= report["fonts_bundled"]
+    except Exception as e:
+        report["fonts_error"] = str(e)
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+    return 0 if report["ok"] else 1
+
+
+def run():
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
+    if len(sys.argv) >= 3 and sys.argv[1] == "--selftest":
+        try:
+            sys.exit(selftest(sys.argv[2]))
+        except SystemExit:
+            raise
+        except BaseException:
+            with open(sys.argv[2], "w", encoding="utf-8") as f:
+                json.dump({"ok": False, "crash": traceback.format_exc()}, f, ensure_ascii=False)
+            sys.exit(2)
+    try:
+        import pilotdesk
+        pilotdesk.main()
+    except SystemExit:
+        raise
+    except BaseException:
+        tb = traceback.format_exc()
+        path = write_error(tb)
+        gui = not any(a in sys.argv for a in ("--service", "--agent", "--host", "--show-id", "--set-password",
+                                              "--install-service", "--uninstall-service", "--service-update"))
+        if gui:
+            try:
+                import tkinter
+                from tkinter import messagebox
+                r = tkinter.Tk()
+                r.withdraw()
+                messagebox.showerror("PilotDesk", f"PilotDesk napotkał błąd i musi zostać zamknięty.\n\n"
+                                                  f"{tb.strip().splitlines()[-1]}\n\nSzczegóły: {path}")
+                r.destroy()
+            except Exception:
+                pass
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    run()

@@ -43,7 +43,8 @@ def main():
         "--hidden-import", "win32timezone", "--hidden-import", "servicemanager",
         "--hidden-import", "win32serviceutil", "--hidden-import", "win32ts", "--hidden-import", "win32profile",
         "--exclude-module", "matplotlib", "--exclude-module", "scipy", "--exclude-module", "pandas",
-        os.path.join(HERE, "pilotdesk.py"),
+        "--hidden-import", "pilotdesk",
+        os.path.join(HERE, "launcher.py"),
     ]
     print(" ".join(args))
     subprocess.check_call(args, cwd=HERE)

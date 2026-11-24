@@ -11,6 +11,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   windows:
     runs-on: windows-latest
@@ -29,13 +32,19 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt pyinstaller
       - run: python build_exe.py
-      - name: Test uruchomienia (bez okna)
+        timeout-minutes: 20
+      - name: Autotest PilotDesk.exe
         shell: bash
+        timeout-minutes: 5
         run: |
-          mkdir -p "$RUNNER_TEMP/pdhome"
-          USERPROFILE="$RUNNER_TEMP/pdhome" ./dist/PilotDesk.exe --show-id
-          echo "kod wyjścia: $?"
-          test -f "$RUNNER_TEMP/pdhome/.pilotdesk.json" && echo "konfiguracja utworzona – program startuje poprawnie"
+          ./dist/PilotDesk.exe --selftest selftest.json; code=$?
+          cat selftest.json
+          echo "kod wyjścia: $code"
+          exit $code
+      - name: Dziennik błędów (gdy autotest się nie uda)
+        if: failure()
+        shell: bash
+        run: cat "$LOCALAPPDATA/PilotDesk/error.log" || true
       - uses: actions/upload-artifact@v4
         with:
           name: PilotDesk-windows
