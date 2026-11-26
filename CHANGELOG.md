@@ -1,8 +1,15 @@
 # Co nowego w PilotDesk
 
 ## 3.8
-- Zamiast ogólnego „Połączenie zostało zamknięte” PilotDesk pokazuje prawdziwy powód, dla którego komputer zdalny odmówił połączenia (np. blokada po zbyt wielu nieudanych próbach logowania – z czasem do odblokowania – albo błąd po tamtej stronie).
-- Dziennik zdarzeń zapisuje każde połączenie przychodzące i jego błędy.
+- Naprawione: gdy PilotDesk się zawiesił, ponowne uruchomienie nic nie dawało (trzeba było odinstalować program). Teraz nowe uruchomienie wykrywa zawieszoną kopię, zamyka ją i startuje od nowa. Aktualizacja i odinstalowanie też radzą sobie z zawieszoną kopią.
+- Naprawione: okno zamierało na czas instalowania/odinstalowywania usługi systemowej i „Napraw zaporę” – teraz dzieje się to w tle.
+- Naprawione: po nieudanej instalacji albo niepełnym odinstalowaniu usługi program mógł przestać przyjmować połączenia. Tryb usługi włącza się tylko wtedy, gdy usługa naprawdę jest zainstalowana.
+- Okno pokazuje wyraźnie, gdy usługa systemowa nie odpowiada (zamiast „Gotowy”), i od razu aktualizuje starszą usługę.
+- Zamiast ogólnego „Połączenie zostało zamknięte” PilotDesk pokazuje prawdziwy powód odmowy (np. blokada po zbyt wielu nieudanych próbach – z czasem do odblokowania).
+- Naprawione: obraz mógł zamarznąć na stałe po zgubieniu potwierdzenia klatki.
+- Nowe: przycisk „Sprawdź połączenie” – sprawdza krok po kroku, czy drugi komputer jest widoczny, czy port jest otwarty i co odpowiada PilotDesk po drugiej stronie.
+- Nowe: „Zapisz raport” (Ustawienia → Dziennik zdarzeń) – jeden plik na pulpicie z dziennikami programu i usługi oraz opisem systemu, bez haseł.
+- Program automatycznie testowany na Windows także w zwykłym trybie (połączenie bez hasła z akceptacją, drugie uruchomienie, zawieszenia okna).
 
 ## 3.7
 - Naprawione: po włączeniu usługi systemowej nie można było połączyć się z komputerem – zapora Windows blokowała usługę (działa ona z osobnej kopii programu, której nie obejmowała dotychczasowa reguła). Usługa sama dodaje teraz regułę zapory, także na komputerach, na których została zainstalowana wcześniej.

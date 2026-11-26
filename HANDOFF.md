@@ -77,11 +77,21 @@ wyłączona, więc sama reguła zapory nie jest tam weryfikowana.
 
 ### 3.1c [OTWARTE] PC 2 po ponownej instalacji: „Połączenie zostało zamknięte”
 PC 2 zawieszał się, użytkownik odinstalował i zainstalował program od nowa (nowe ID **142 818 599**).
-PC 1 widzi go w „W Twojej sieci”, ale łączenie (bez hasła, tryb „Akceptuj/Odrzuć”) kończy się
-„Połączenie zostało zamknięte” = host zamknął gniazdo **przed wysłaniem hello** (ciche `return` przy blokadzie
-`Lockout` albo wyjątek w `handle_conn`). 3.8: host wysyła jawną odmowę `{"app","proto","error"}`
-(`pd_host._refuse`), klient pokazuje powód (`viewer_handshake`), dziennik zapisuje każde połączenie
-przychodzące. Przyczyna nieznana – potrzebny `pilotdesk.log` z PC 2 i komunikat z PC 1 po aktualizacji do 3.8.
+PC 1 widzi go w „W Twojej sieci”, ale łączenie (bez hasła, „Akceptuj/Odrzuć”) kończyło się „Połączenie zostało
+zamknięte” = host zamknął gniazdo **przed wysłaniem hello**. Przyczyna nieznana (brak dziennika z PC 2).
+3.8: jawna odmowa z powodem (`pd_host._refuse`), „Sprawdź połączenie” (`pd_diag.check_target`) i „Zapisz raport”
+(`pd_diag.make_report`) – poprosić użytkownika o wynik sprawdzenia z PC 1 i raport z PC 2.
+
+### 3.1d [3.8] Przegląd całego programu – co poprawiono
+- Zawieszona kopia: `SingleInstance` odpowiada „ok/hung <pid>” (sygnał życia z `App._poll`), drugie uruchomienie
+  zabija zawieszoną kopię (`pd_install.kill_instance`); `install()`/`uninstall()` używają `close_running_instance`.
+- `run_elevated(wait=True)` nie jest już wołane w wątku okna (usługa, zapora) – zdarzenie okna `"call"`.
+- `service_mode()` = host.json **i** usługa w rejestrze (`service_registered`); agent bez `host_id` nie udostępnia.
+- `ServiceHostProxy.connected` – okno pokazuje „Usługa nie odpowiada”; starszy agent dostaje `op: update`
+  (`service_update_check`), usługa sprawdza aktualizacje po 2 min i co 3 h.
+- Ekran hosta: limit 5 s na potwierdzenia klatek (`inflight`).
+- Testy CI na Windows: `scripts/ci_service_test.py` (usługa) i `scripts/ci_app_test.py` (okno, tryb bez hasła;
+  `PILOTDESK_TEST_AUTOACCEPT=1` klika „Akceptuj” automatycznie – zmienna tylko dla testów).
 
 ### 3.2 Łączenie przez internet (bez wspólnej sieci) – czeka na użytkownika
 Gotowe: `pd_relay.py` (serwer asyncio, bez zależności) + `scripts/install_relay.sh` (jedno polecenie:
