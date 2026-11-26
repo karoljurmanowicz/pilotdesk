@@ -16,8 +16,18 @@ _log = logging.getLogger("pilotdesk")
 _ready = False
 
 
+SYSTEM_ARGS = ("--service", "--agent", "--install-service", "--uninstall-service", "--service-update")
+
+
+def system_mode():
+    return len(sys.argv) > 1 and sys.argv[1] in SYSTEM_ARGS
+
+
 def log_dir():
-    if sys.platform == "win32":
+    if sys.platform == "win32" and system_mode():
+        # usługa i jej agent działają jako SYSTEM – ich dziennik ma być tam, gdzie użytkownik go znajdzie
+        d = os.path.join(os.environ.get("PROGRAMDATA", r"C:\ProgramData"), "PilotDesk", "logs")
+    elif sys.platform == "win32":
         d = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "PilotDesk")
     else:
         d = os.path.join(os.path.expanduser("~"), ".local", "share", "pilotdesk")
@@ -26,6 +36,8 @@ def log_dir():
 
 
 def log_path():
+    if system_mode():  # osobny plik dla każdego procesu (rotacja jednego pliku z dwóch procesów się psuje)
+        return os.path.join(log_dir(), sys.argv[1].strip("-") + ".log")
     return os.path.join(log_dir(), "pilotdesk.log")
 
 

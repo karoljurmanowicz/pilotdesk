@@ -1,0 +1,23 @@
+# Test usługi systemowej na prawdziwym Windows. Nic nie publikuje.
+name: Test usługi Windows
+on:
+  push:
+    branches: ["claude/**"]
+  workflow_dispatch:
+jobs:
+  service:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt pyinstaller
+      - run: python build_exe.py
+        timeout-minutes: 20
+      - name: Test usługi
+        timeout-minutes: 12
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python scripts/ci_service_test.py

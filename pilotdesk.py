@@ -794,6 +794,11 @@ class App:
                 f'enable=yes profile=any & '
                 f'netsh advfirewall firewall add rule name="PilotDesk" dir=in action=allow protocol=UDP localport=47802 '
                 f'enable=yes profile=any')
+        if self.service:  # usługa działa z kopii w Program Files – osobna reguła
+            import pd_service
+            rule += (f' & netsh advfirewall firewall delete rule name="{pd_service.FW_RULE}" & '
+                     f'netsh advfirewall firewall add rule name="{pd_service.FW_RULE}" dir=in action=allow '
+                     f'program="{pd_service.program_exe()}" enable=yes profile=any')
         try:
             code = W.run_elevated("cmd.exe", f"/c {rule}", wait=True)
             self.toast("Zapora ustawiona – PilotDesk może przyjmować połączenia." if code == 0 else
@@ -1015,7 +1020,7 @@ class App:
                                   "Odinstaluj", danger=True, icon="shield"):
                 return
             for k in ("host_id", "id_secret", "pw_salt", "pw_key", "relay", "relay_key", "listen_port",
-                      "direct_enabled", "ask_enabled"):
+                      "direct_enabled", "ask_enabled", "trusted"):
                 if k in self.hcfg:
                     self.cfg[k] = self.hcfg[k]
             self.cfg["host_enabled"] = True
@@ -1793,7 +1798,7 @@ class InstallWindow:
                                    log=lambda m: self.root.after(0, lambda: self.status.configure(text=m)))
                 self.root.after(0, lambda: self._done(exe))
             except Exception as e:
-                self.root.after(0, lambda: self._fail(e))
+                self.root.after(0, lambda err=e: self._fail(err))
         threading.Thread(target=work, daemon=True).start()
 
     def _done(self, exe):

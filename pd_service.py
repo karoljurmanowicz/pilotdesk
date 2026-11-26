@@ -23,12 +23,23 @@ import time
 from pd_common import (VERSION, load_config, machine_config_path, machine_dir, save_config, update_source)
 
 SERVICE_NAME = "PilotDeskService"
+
+
+def _log(msg):
+    try:
+        import pd_log
+        pd_log.info("%s", msg)
+    except Exception:
+        pass
+
+
 CONTROL_PORT = 47803
 NO_WINDOW = 0x08000000
 DETACHED = 0x00000008
 BREAKAWAY = 0x01000000
 HOST_KEYS = ("host_id", "id_secret", "pw_salt", "pw_key", "relay", "relay_key", "listen_port", "direct_enabled",
-             "ask_enabled", "update_source", "auto_update")
+             "ask_enabled", "update_source", "auto_update", "trusted")
+FW_RULE = "PilotDesk Service"  # ASCII – netsh/cmd psują polskie znaki
 
 
 def program_dir():
@@ -54,6 +65,24 @@ def service_installed():
 
 def service_running():
     return sys.platform == "win32" and "RUNNING" in _sc("query", SERVICE_NAME).stdout
+
+
+def _netsh(*args):
+    return subprocess.run(["netsh", "advfirewall", "firewall", *args], capture_output=True, text=True,
+                          creationflags=NO_WINDOW)
+
+
+def set_firewall_rules(on=True):
+    """Usługa działa z kopii programu w Program Files – reguła zapory dla zwykłego PilotDesk.exe jej nie obejmuje,
+    a Windows nie pyta o zgodę dla procesów SYSTEM. Bez tej reguły nikt nie mógł się połączyć."""
+    _netsh("delete", "rule", f"name={FW_RULE}")
+    if not on:
+        return True
+    r1 = _netsh("add", "rule", f"name={FW_RULE}", "dir=in", "action=allow", f"program={program_exe()}",
+                "enable=yes", "profile=any")
+    r2 = _netsh("add", "rule", f"name={FW_RULE}", "dir=in", "action=allow", "protocol=UDP", "localport=47802",
+                "enable=yes", "profile=any")
+    return r1.returncode == 0 and r2.returncode == 0
 
 
 def _wait_state(state, timeout=30):
@@ -95,6 +124,10 @@ def install_service(user_config_path):
     # użytkownicy mogą zmieniać ustawienia udostępniania z okna programu (hasło, serwer)
     subprocess.run(["icacls", machine_dir(), "/grant", "*S-1-5-32-545:(OI)(CI)M", "/T", "/Q"],
                    capture_output=True, creationflags=NO_WINDOW)
+    try:
+        _log("Zapora: reguła dla usługi " + ("dodana" if set_firewall_rules(True) else "NIE została dodana"))
+    except Exception as e:
+        _log(f"Zapora: błąd {e}")
     bin_path = f'"{program_exe()}" --service'
     if service_installed():
         _sc("config", SERVICE_NAME, "binPath=", bin_path, "start=", "auto", check=True)
@@ -110,6 +143,10 @@ def uninstall_service():
     _sc("stop", SERVICE_NAME)
     _wait_state("STOPPED")
     _sc("delete", SERVICE_NAME)
+    try:
+        set_firewall_rules(False)
+    except Exception:
+        pass
     try:
         os.remove(machine_config_path())
     except OSError:
@@ -210,8 +247,18 @@ def run_service_dispatcher():
             self.proc = hp
             self.sid = sid
 
+        def _ensure_firewall(self):
+            """Usługi zainstalowane przed 3.7 nie miały reguły zapory – dodajemy ją przy starcie (jesteśmy SYSTEM)."""
+            try:
+                if _netsh("show", "rule", f"name={FW_RULE}").returncode != 0:
+                    _log("Zapora: brak reguły dla usługi – dodaję: " + ("OK" if set_firewall_rules(True) else "BŁĄD"))
+            except Exception as e:
+                _log(f"Zapora: {e}")
+
         def main(self):
             import win32ts
+            _log(f"Usługa {VERSION} uruchomiona ({sys.executable})")
+            threading.Thread(target=self._ensure_firewall, daemon=True).start()
             last_upd = time.time() - 6 * 3600 + 300  # pierwsze sprawdzenie aktualizacji po 5 min
             while win32event.WaitForSingleObject(self.stop_evt, 2000) != win32event.WAIT_OBJECT_0:
                 sid = win32ts.WTSGetActiveConsoleSessionId()
@@ -220,7 +267,9 @@ def run_service_dispatcher():
                     self.last_spawn = time.time()
                     try:
                         self._spawn(sid)
+                        _log(f"Uruchomiono agenta w sesji {sid}")
                     except Exception as e:
+                        _log(f"Nie można uruchomić agenta w sesji {sid}: {e!r}")
                         servicemanager.LogErrorMsg(f"PilotDesk: nie można uruchomić agenta: {e}")
                 if time.time() - last_upd > 6 * 3600:
                     last_upd = time.time()
@@ -358,6 +407,8 @@ def run_agent():
     from pd_host import HostService
     path = machine_config_path()
     cfg = load_config(path)
+    _log(f"Agent {VERSION} start (pid {os.getpid()}), konfiguracja {path}: ID={cfg.get('host_id')}, "
+         f"hasło={'tak' if cfg.get('pw_key') else 'nie'}, port={cfg.get('listen_port')}")
     ctl = ControlServer(cfg.get("control_token", ""))
     svc = HostService(cfg, log=ctl.log, on_chat=ctl.chat, on_sessions=ctl.sessions_changed, on_status=ctl.status,
                       ask=ctl.ask, agent_mode=True, save_cfg=lambda: save_config(cfg, path))
