@@ -167,6 +167,7 @@ class App:
         self._build_kvm_page()
         self._build_access_page()
         self._build_settings_page()
+        self._build_updates_page()
         self.show_page("connect")
 
         if self.service:
@@ -206,7 +207,9 @@ class App:
         head.pack(fill="x", padx=18, pady=(20, 18))
         ctk.CTkLabel(head, text="", image=T.ctk_logo(28)).pack(side="left")
         U.label(head, "PilotDesk", 15, "bold").pack(side="left", padx=10)
-        U.label(head, VERSION, 11, color=T.TEXT_3, mono=True).pack(side="right")
+        ver = U.label(head, VERSION, 11, color=T.TEXT_3, mono=True, cursor="hand2")
+        ver.pack(side="right")
+        ver.bind("<Button-1>", lambda e: self.show_page("updates"))
         self.nav = {}
 
         def group(title):
@@ -220,6 +223,7 @@ class App:
         self.nav["access"] = NavItem(self, sb, "access", "Dostęp", "shield")
         group("aplikacja")
         self.nav["settings"] = NavItem(self, sb, "settings", "Ustawienia", "settings")
+        self.nav["updates"] = NavItem(self, sb, "updates", "Aktualizacje", "download")
 
         me = U.card(sb, fg_color=T.SURFACE, corner_radius=10)
         me.pack(side="bottom", fill="x", padx=12, pady=12)
@@ -232,7 +236,6 @@ class App:
         U.label(top, hostname()[:20], 12, "medium").pack(side="left", padx=6)
         self.me_sub = U.label(mi, "", 11, color=T.TEXT_3, mono=True)
         self.me_sub.pack(anchor="w", pady=(2, 0))
-        self.update_btn = U.secondary_button(sb, "Aktualizuj", self._install_update_now, icon="download", height=30)
 
     def show_page(self, key):
         for k, item in self.nav.items():
@@ -832,7 +835,7 @@ class App:
     # ================================================================ strona: Ustawienia
     def _build_settings_page(self):
         ctk, T, U = self.ctk, self.T, self.U
-        p = self._page("settings", "Ustawienia", "Sieć, uruchamianie, aktualizacje i wygląd.")
+        p = self._page("settings", "Ustawienia", "Sieć, uruchamianie i wygląd.")
 
         U.section(p, "sieć", padx=40, pady=(22, 10))
         c = U.card(p)
@@ -858,23 +861,6 @@ class App:
         r = self._setting_row(c, "Start razem z systemem", "PilotDesk działa w tle po zalogowaniu.", first=True)
         self.s_auto = ctk.BooleanVar(value=self._autostart_enabled())
         U.switch(r.right, "", self.s_auto).pack()
-
-        U.section(p, "aktualizacje", padx=40)
-        c = U.card(p)
-        c.pack(fill="x", padx=40)
-        r = self._setting_row(c, "Źródło", "Repozytorium GitHub „właściciel/nazwa” (zakładka Releases) albo adres "
-                                         "URL pliku JSON z opisem wersji.", first=True)
-        self.s_upd = U.entry(r.right, "uzytkownik/pilotdesk", width=240, height=34, mono=True, size=12)
-        self.s_upd.pack()
-        self.s_upd.insert(0, update_source(self.cfg))
-        r = self._setting_row(c, "Aktualizuj automatycznie", "Nowa wersja instaluje się sama, gdy nie trwa żadna sesja.")
-        self.s_auto_upd = ctk.BooleanVar(value=self.cfg.get("auto_update", True))
-        U.switch(r.right, "", self.s_auto_upd).pack()
-        r = self._setting_row(c, f"Wersja {VERSION}", "")
-        self.upd_status = r.desc if hasattr(r, "desc") else None
-        self.upd_state = U.label(r.right, "", 12, color=T.TEXT_2)
-        self.upd_state.pack(side="left", padx=10)
-        U.secondary_button(r.right, "Sprawdź teraz", lambda: self.check_updates(manual=True), width=120).pack(side="left")
 
         U.section(p, "wygląd", padx=40)
         c = U.card(p)
@@ -925,10 +911,6 @@ class App:
         self.hcfg["relay_key"] = self.s_rkey.get().strip()
         self.hcfg["listen_port"] = port
         self.hcfg["direct_enabled"] = bool(self.s_direct.get())
-        self.cfg["update_source"] = self.s_upd.get().strip()
-        self.cfg["auto_update"] = bool(self.s_auto_upd.get())
-        self.hcfg["update_source"] = self.cfg["update_source"]
-        self.hcfg["auto_update"] = self.cfg["auto_update"]
         save_config(self.cfg)
         self._save_host()
         try:
@@ -1069,6 +1051,16 @@ class App:
                 self._kvm_refresh_menu()
         elif kind == "update":
             self._on_update_info(*data)
+        elif kind == "upd_progress":
+            self._upd_progress(*data)
+        elif kind == "upd_ready":
+            self._upd_ready(data)
+        elif kind == "upd_failed":
+            self._upd_failed(data)
+        elif kind == "check_updates":
+            self.show_window()
+            self.show_page("updates")
+            self.check_updates(manual=True)
         elif kind == "toast":
             self.toast(*data)
         elif kind == "show":
@@ -1382,60 +1374,196 @@ class App:
             save_config(self.cfg)
 
     # ================================================================ aktualizacje
+    def _build_updates_page(self):
+        ctk, T, U = self.ctk, self.T, self.U
+        p = self._page("updates", "Aktualizacje", "Nowe wersje PilotDesk instalujesz jednym kliknięciem.")
+        c = U.card(p)
+        c.pack(fill="x", padx=40, pady=(18, 0))
+        i = ctk.CTkFrame(c, fg_color="transparent")
+        i.pack(fill="x", padx=22, pady=20)
+        top = ctk.CTkFrame(i, fg_color="transparent")
+        top.pack(fill="x")
+        left = ctk.CTkFrame(top, fg_color="transparent")
+        left.pack(side="left", fill="x", expand=True)
+        U.label(left, "ZAINSTALOWANA WERSJA", 10, color=T.TEXT_3, mono=True).pack(anchor="w")
+        U.label(left, VERSION, 26, mono=True).pack(anchor="w", pady=(4, 2))
+        self.upd_title = U.label(left, "Nie sprawdzano jeszcze aktualizacji.", 13, "medium")
+        self.upd_title.pack(anchor="w")
+        self.upd_sub = U.label(left, "", 12, color=T.TEXT_3)
+        self.upd_sub.pack(anchor="w")
+        right = ctk.CTkFrame(top, fg_color="transparent")
+        right.pack(side="right", anchor="n")
+        self.upd_install_btn = U.primary_button(right, "Zaktualizuj", lambda: self._install_update_now(manual=True),
+                                                icon="download", width=170)
+        self.upd_check_btn = U.secondary_button(right, "Sprawdź teraz", lambda: self.check_updates(manual=True),
+                                                icon="refresh", width=150)
+        self.upd_check_btn.pack(side="right")
+        self.upd_prog_row = ctk.CTkFrame(i, fg_color="transparent")
+        self.upd_bar = ctk.CTkProgressBar(self.upd_prog_row, height=6, progress_color=T.GREEN, fg_color=T.SURFACE_3)
+        self.upd_bar.pack(fill="x", pady=(16, 4))
+        self.upd_bar.set(0)
+        self.upd_prog = U.label(self.upd_prog_row, "", 11, color=T.TEXT_3, mono=True)
+        self.upd_prog.pack(anchor="w")
+
+        U.section(p, "co nowego", padx=40)
+        self.upd_notes = ctk.CTkTextbox(p, height=170, font=T.font(12), fg_color=T.SURFACE, border_color=T.BORDER,
+                                        border_width=1, corner_radius=12, text_color=T.TEXT_2, wrap="word")
+        self.upd_notes.pack(fill="x", padx=40)
+        self._set_notes(self._local_changelog(VERSION) or "Lista zmian pojawi się po sprawdzeniu aktualizacji.")
+
+        U.section(p, "ustawienia", padx=40)
+        c = U.card(p)
+        c.pack(fill="x", padx=40, pady=(0, 34))
+        r = self._setting_row(c, "Instaluj automatycznie",
+                              "Nowa wersja zainstaluje się sama – tylko wtedy, gdy nie trwa żadne połączenie. Program "
+                              "sprawdza aktualizacje przy starcie i co 12 godzin.", first=True)
+        self.s_auto_upd = ctk.BooleanVar(value=self.cfg.get("auto_update", True))
+        U.switch(r.right, "", self.s_auto_upd, command=self._save_upd_settings).pack()
+        r = self._setting_row(c, "Źródło aktualizacji", "Repozytorium GitHub (zakładka Releases) albo adres pliku JSON. "
+                                                         "Zwykle nie trzeba tego zmieniać.")
+        self.s_upd = U.entry(r.right, "właściciel/repozytorium", width=240, height=32, mono=True, size=12)
+        self.s_upd.insert(0, update_source(self.cfg))
+        self.s_upd.pack(side="left")
+        U.secondary_button(r.right, "Zapisz", self._save_upd_settings, width=80, height=32).pack(side="left", padx=(8, 0))
+        if not (INST.is_frozen() and INST.is_windows()):
+            U.label(p, "Uwaga: automatyczna instalacja działa w wersji PilotDesk.exe dla Windows. Tutaj możesz "
+                       "sprawdzić, czy jest nowa wersja.", 12, color=T.AMBER, wraplength=700, justify="left").pack(
+                anchor="w", padx=40, pady=(0, 30))
+
+    @staticmethod
+    def _local_changelog(version):
+        import re
+        try:
+            import pd_theme
+            with open(pd_theme.resource("CHANGELOG.md"), encoding="utf-8") as f:
+                text = f.read()
+        except OSError:
+            return ""
+        m = re.search(r"^## " + re.escape(version) + r"\s*\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+        return m.group(1).strip() if m else ""
+
+    def _set_notes(self, text):
+        self.upd_notes.configure(state="normal")
+        self.upd_notes.delete("1.0", "end")
+        self.upd_notes.insert("1.0", text.replace("**", ""))
+        self.upd_notes.configure(state="disabled")
+
+    def _save_upd_settings(self):
+        self.cfg["update_source"] = self.s_upd.get().strip()
+        self.cfg["auto_update"] = bool(self.s_auto_upd.get())
+        self.hcfg["update_source"] = self.cfg["update_source"]
+        self.hcfg["auto_update"] = self.cfg["auto_update"]
+        save_config(self.cfg)
+        if self.hpath:
+            self._save_host()
+        self.toast("Zapisano.", "ok")
+
+    def _upd_state(self, title, sub="", color=None):
+        self.upd_title.configure(text=title, text_color=color or self.T.TEXT)
+        self.upd_sub.configure(text=sub)
+
+    def _sessions_busy(self):
+        return bool((self.host and self.host.sessions) or (self.sessions_win and self.sessions_win.views)
+                    or (self.kvm_link and self.kvm_link.connected))
+
     def check_updates(self, manual=False):
-        src = (self.s_upd.get().strip() if manual else update_source(self.cfg)).strip()
+        src = update_source(self.cfg).strip()
         if not src:
             if manual:
-                self.toast("Wpisz źródło aktualizacji (repozytorium GitHub albo URL).", "warn")
+                self._upd_state("Brak źródła aktualizacji", "Wpisz je poniżej w „Źródło aktualizacji”.", self.T.AMBER)
             return
         if manual:
-            self.upd_state.configure(text="sprawdzam…")
+            self.upd_check_btn.configure(state="disabled", text="Sprawdzam…")
+            self._upd_state("Sprawdzam, czy jest nowa wersja…", "")
 
         def work():
             import pd_update
             try:
-                info = pd_update.check(src)
-                self.post("update", (info, manual, None))
+                self.post("update", (pd_update.check(src), manual, None))
             except Exception as e:
                 self.post("update", (None, manual, str(e)))
         threading.Thread(target=work, daemon=True).start()
 
     def _on_update_info(self, info, manual, err):
         import pd_update
+        T = self.T
+        self.upd_check_btn.configure(state="normal", text="Sprawdź teraz")
+        when = "Sprawdzono " + time.strftime("dziś o %H:%M")
         if err:
-            self.upd_state.configure(text="błąd sprawdzania")
-            if manual:
-                self.toast(f"Aktualizacje: {err}", "error", 6000)
+            msg = "brak połączenia z internetem" if "urlopen" in err or "timed out" in err else err[:120]
+            self._upd_state("Nie udało się sprawdzić aktualizacji", f"{when} · {msg}", T.AMBER)
             return
         if not info or not pd_update.newer(info["version"], VERSION):
-            self.upd_state.configure(text="masz najnowszą wersję")
+            self.update_info = None
+            self.upd_install_btn.pack_forget()
+            self.nav["updates"].set_badge("")
+            self._upd_state("Masz najnowszą wersję.", when, T.GREEN)
+            if info and info.get("notes"):
+                self._set_notes(info["notes"])
             return
+        first_time = not self.update_info or self.update_info.get("version") != info["version"]
         self.update_info = info
-        self.upd_state.configure(text=f"dostępna {info['version']}")
-        self.update_btn.configure(text=f"Aktualizuj do {info['version']}")
-        self.update_btn.pack(side="bottom", fill="x", padx=12, pady=(0, 4))
-        busy = (self.host and self.host.sessions) or (self.sessions_win and self.sessions_win.views)
-        if (self.cfg.get("auto_update", True) and not manual and not busy) or manual:
-            self._install_update_now()
+        size = f" · {info['size'] / 1048576:.0f} MB" if info.get("size") else ""
+        self._upd_state(f"Dostępna jest wersja {info['version']}", f"{when}{size}" +
+                        (f" · wydana {info['date']}" if info.get("date") else ""), T.AMBER)
+        self.upd_install_btn.configure(text=f"Zaktualizuj do {info['version']}", state="normal")
+        self.upd_install_btn.pack(side="right", padx=(0, 8))
+        self.nav["updates"].set_badge(dot=T.AMBER)
+        self._set_notes(info.get("notes") or "Poprawki i ulepszenia.")
+        if first_time and not manual:
+            self.toast(f"Dostępna nowa wersja PilotDesk {info['version']} – zobacz zakładkę Aktualizacje.", "info", 6000)
+        if not manual and self.cfg.get("auto_update", True) and not self._sessions_busy():
+            self._install_update_now(manual=False)
 
-    def _install_update_now(self):
+    def _install_update_now(self, manual=True):
         if not self.update_info:
             return
         if not (INST.is_frozen() and INST.is_windows()):
-            self.toast("Automatyczna instalacja działa w wersji PilotDesk.exe. Pobierz nową wersję ręcznie.", "warn", 6000)
+            self.toast("Instalacja aktualizacji działa w wersji PilotDesk.exe dla Windows.", "warn", 6000)
+            return
+        if manual and self._sessions_busy() and not self.U.confirm(
+                self.root, "Zaktualizować teraz?", "Trwające połączenia zostaną zakończone, a PilotDesk uruchomi się "
+                                                   "ponownie w nowej wersji (zwykle w kilka sekund).", "Zaktualizuj"):
             return
         info = self.update_info
-        self.toast(f"Pobieranie wersji {info['version']}…")
+        self.upd_install_btn.configure(state="disabled", text="Pobieranie…")
+        self.upd_check_btn.configure(state="disabled")
+        self.upd_bar.set(0)
+        self.upd_prog.configure(text="")
+        self.upd_prog_row.pack(fill="x")
+        self._upd_state(f"Pobieranie wersji {info['version']}…", "Nie zamykaj programu.", self.T.TEXT)
+        if manual:
+            self.show_page("updates")
 
         def work():
             import pd_update
             try:
-                path = pd_update.download(info)
-                INST.launch_detached([path, "--apply-update"])
-                self.post("quit")
+                path = pd_update.download(info, progress=lambda got, total: self.post("upd_progress", (got, total)))
+                self.post("upd_ready", path)
             except Exception as e:
-                self.post("toast", (f"Aktualizacja nieudana: {e}", "error", 6000))
+                self.post("upd_failed", str(e))
         threading.Thread(target=work, daemon=True).start()
+
+    def _upd_progress(self, got, total):
+        total = total or (self.update_info or {}).get("size") or 0
+        if total:
+            self.upd_bar.set(min(1.0, got / total))
+            self.upd_prog.configure(text=f"{got / 1048576:.0f} / {total / 1048576:.0f} MB")
+        else:
+            self.upd_prog.configure(text=f"{got / 1048576:.0f} MB")
+
+    def _upd_ready(self, path):
+        self.upd_bar.set(1)
+        self.upd_prog.configure(text="suma kontrolna zgodna")
+        self._upd_state("Instalowanie…", "PilotDesk uruchomi się ponownie za chwilę.", self.T.GREEN)
+        INST.launch_detached([path, "--apply-update"])
+        self.root.after(1500, self.quit)
+
+    def _upd_failed(self, err):
+        self.upd_prog_row.pack_forget()
+        self.upd_install_btn.configure(state="normal", text=f"Spróbuj ponownie")
+        self.upd_check_btn.configure(state="normal")
+        self._upd_state("Aktualizacja nie powiodła się", err[:160], self.T.RED)
 
     def _auto_update_tick(self):
         if self.cfg.get("auto_update", True) and update_source(self.cfg):
@@ -1455,6 +1583,7 @@ class App:
                     pystray.MenuItem(lambda _i: f"ID: {format_id(self.hcfg['host_id'])}", None, enabled=False),
                     pystray.MenuItem(lambda _i: "Dostęp: włączony" if self.host else "Dostęp: wyłączony", None, enabled=False),
                     pystray.Menu.SEPARATOR,
+                    pystray.MenuItem("Sprawdź aktualizacje", lambda: self.post("check_updates")),
                     pystray.MenuItem("Wspólna mysz i klawiatura", lambda: self.post("kvm_toggle"),
                                      checked=lambda _i: bool(self.kvm_link)),
                     pystray.Menu.SEPARATOR,

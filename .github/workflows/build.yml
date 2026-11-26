@@ -51,6 +51,21 @@ jobs:
           path: |
             dist/PilotDesk.exe
             dist/PilotDesk.exe.sha256
+      - name: Lista zmian dla tej wersji
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python - <<'PY'
+          import re
+          v = "${{ steps.ver.outputs.version }}"
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          m = re.search(r"^## " + re.escape(v) + r"\s*\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+          notes = (m.group(1).strip() if m else "Poprawki i ulepszenia.")
+          notes += "\n\n**Instalacja:** pobierz PilotDesk.exe, uruchom i kliknij „Zainstaluj”. Zainstalowane programy zaktualizują się same."
+          open("release_notes.md", "w", encoding="utf-8").write(notes)
+          print(notes)
+          PY
       - name: Opublikuj wydanie
         uses: softprops/action-gh-release@v2
         with:
@@ -58,9 +73,7 @@ jobs:
           name: PilotDesk ${{ steps.ver.outputs.version }}
           target_commitish: ${{ github.sha }}
           make_latest: true
-          body: |
-            Pobierz **PilotDesk.exe**, uruchom i kliknij „Zainstaluj”.
-            Zainstalowane programy zaktualizują się same.
+          body_path: release_notes.md
           files: |
             dist/PilotDesk.exe
             dist/PilotDesk.exe.sha256

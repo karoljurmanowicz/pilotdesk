@@ -36,11 +36,13 @@ def check(source):
         return None
     if "://" in source:
         d = json.loads(_get(source))
-        return {"version": str(d["version"]), "url": d["url"], "sha256": d.get("sha256", "")}
+        return {"version": str(d["version"]), "url": d["url"], "sha256": d.get("sha256", ""),
+                "notes": d.get("notes", ""), "size": int(d.get("size", 0))}
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", source):
         raise ValueError("Źródło aktualizacji: wpisz „właściciel/repozytorium” albo adres URL.")
     rel = json.loads(_get(f"https://api.github.com/repos/{source}/releases/latest"))
     assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+    sizes = {a["name"]: a.get("size", 0) for a in rel.get("assets", [])}
     if "PilotDesk.exe" not in assets:
         return None
     sha = ""
@@ -49,7 +51,16 @@ def check(source):
             sha = _get(assets["PilotDesk.exe.sha256"]).decode().split()[0].strip().lower()
         except Exception:
             sha = ""
-    return {"version": rel.get("tag_name", "0"), "url": assets["PilotDesk.exe"], "sha256": sha}
+    return {"version": rel.get("tag_name", "0").lstrip("vV"), "url": assets["PilotDesk.exe"], "sha256": sha,
+            "notes": clean_notes(rel.get("body") or ""), "size": sizes.get("PilotDesk.exe", 0),
+            "date": (rel.get("published_at") or "")[:10]}
+
+
+def clean_notes(text):
+    """Opis wydania bez technicznych dopisków."""
+    out = [ln for ln in text.replace("\r", "").splitlines()
+           if not ln.startswith(("Co-Authored-By", "Claude-Session"))]
+    return "\n".join(out).strip()
 
 
 def download(info, dest=None, progress=None):

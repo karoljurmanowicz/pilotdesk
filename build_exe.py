@@ -38,6 +38,7 @@ def main():
         "--name", "PilotDesk", "--icon", ico, "--version-file", ver_file,
         "--collect-data", "customtkinter", "--collect-data", "soundcard", "--collect-submodules", "av",
         "--add-data", os.path.join(HERE, "fonts") + os.pathsep + "fonts",
+        "--add-data", os.path.join(HERE, "CHANGELOG.md") + os.pathsep + ".",
         "--hidden-import", "pynput.keyboard._win32", "--hidden-import", "pynput.mouse._win32",
         "--hidden-import", "pystray._win32", "--hidden-import", "PIL._tkinter_finder",
         "--hidden-import", "win32timezone", "--hidden-import", "servicemanager",
