@@ -1076,6 +1076,8 @@ class App:
             self._upd_ready(data)
         elif kind == "upd_failed":
             self._upd_failed(data)
+        elif kind == "diag":
+            self._show_diag(data)
         elif kind == "check_updates":
             self.show_window()
             self.show_page("updates")
@@ -1438,7 +1440,7 @@ class App:
         U.label(left, VERSION, 26, mono=True).pack(anchor="w", pady=(4, 2))
         self.upd_title = U.label(left, "Nie sprawdzano jeszcze aktualizacji.", 13, "medium")
         self.upd_title.pack(anchor="w")
-        self.upd_sub = U.label(left, "", 12, color=T.TEXT_3)
+        self.upd_sub = U.label(left, "", 12, color=T.TEXT_3, wraplength=520, justify="left")
         self.upd_sub.pack(anchor="w")
         right = ctk.CTkFrame(top, fg_color="transparent")
         right.pack(side="right", anchor="n")
@@ -1468,6 +1470,10 @@ class App:
                               "sprawdza aktualizacje przy starcie i co 12 godzin.", first=True)
         self.s_auto_upd = ctk.BooleanVar(value=self.cfg.get("auto_update", True))
         U.switch(r.right, "", self.s_auto_upd, command=self._save_upd_settings).pack()
+        r = self._setting_row(c, "Diagnostyka połączenia", "Sprawdza DNS, proxy i certyfikat połączenia z serwerem "
+                                                            "aktualizacji. Raport trafia też do schowka.")
+        self.diag_btn = U.secondary_button(r.right, "Diagnostyka", self._net_diagnose, width=120)
+        self.diag_btn.pack()
         r = self._setting_row(c, "Źródło aktualizacji", "Repozytorium GitHub (zakładka Releases) albo adres pliku JSON. "
                                                          "Zwykle nie trzeba tego zmieniać.")
         self.s_upd = U.entry(r.right, "właściciel/repozytorium", width=240, height=32, mono=True, size=12)
@@ -1530,7 +1536,9 @@ class App:
             try:
                 self.post("update", (pd_update.check(src), manual, None))
             except Exception as e:
-                self.post("update", (None, manual, str(e)))
+                friendly = getattr(e, "friendly", None) or str(e)
+                detail = getattr(e, "detail", "") or ""
+                self.post("update", (None, manual, (friendly, detail)))
         threading.Thread(target=work, daemon=True).start()
 
     def _on_update_info(self, info, manual, err):
@@ -1539,8 +1547,10 @@ class App:
         self.upd_check_btn.configure(state="normal", text="Sprawdź teraz")
         when = "Sprawdzono " + time.strftime("dziś o %H:%M")
         if err:
-            msg = "brak połączenia z internetem" if "urlopen" in err or "timed out" in err else err[:120]
-            self._upd_state("Nie udało się sprawdzić aktualizacji", f"{when} · {msg}", T.AMBER)
+            friendly, detail = err if isinstance(err, tuple) else (str(err), "")
+            self.upd_last_error = f"{friendly}\n{detail}".strip()
+            self._upd_state("Nie udało się sprawdzić aktualizacji", f"{when} · {friendly}. Kliknij „Diagnostyka”, "
+                                                                     "aby zobaczyć szczegóły.", T.AMBER)
             return
         if not info or not pd_update.newer(info["version"], VERSION):
             self.update_info = None
@@ -1590,7 +1600,7 @@ class App:
                 path = pd_update.download(info, progress=lambda got, total: self.post("upd_progress", (got, total)))
                 self.post("upd_ready", path)
             except Exception as e:
-                self.post("upd_failed", str(e))
+                self.post("upd_failed", getattr(e, "friendly", None) and f"{e.friendly} ({e.detail})" or str(e))
         threading.Thread(target=work, daemon=True).start()
 
     def _upd_progress(self, got, total):
@@ -1608,11 +1618,32 @@ class App:
         INST.launch_detached([path, "--apply-update"])
         self.root.after(1500, self.quit)
 
+    def _net_diagnose(self):
+        self.diag_btn.configure(state="disabled", text="Sprawdzam…")
+
+        def work():
+            import pd_net
+            try:
+                rep = pd_net.diagnose("api.github.com") + "\n\n" + pd_net.diagnose("objects.githubusercontent.com")
+            except Exception as e:
+                rep = f"Błąd diagnostyki: {e}"
+            last = getattr(self, "upd_last_error", "")
+            self.post("diag", rep + (f"\n\nOstatni błąd aktualizacji:\n{last}" if last else ""))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_diag(self, rep):
+        self.diag_btn.configure(state="normal", text="Diagnostyka")
+        self.root.clipboard_clear()
+        self.root.clipboard_append(rep)
+        self.U.info(self.root, "Diagnostyka połączenia", rep + "\n\n(Raport skopiowano do schowka – możesz go wkleić.)",
+                    icon="globe")
+
     def _upd_failed(self, err):
         self.upd_prog_row.pack_forget()
         self.upd_install_btn.configure(state="normal", text=f"Spróbuj ponownie")
         self.upd_check_btn.configure(state="normal")
-        self._upd_state("Aktualizacja nie powiodła się", err[:160], self.T.RED)
+        self.upd_last_error = err
+        self._upd_state("Aktualizacja nie powiodła się", err[:200] + " · szczegóły: „Diagnostyka”", self.T.RED)
 
     def _auto_update_tick(self):
         if self.cfg.get("auto_update", True) and update_source(self.cfg):

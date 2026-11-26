@@ -36,7 +36,7 @@ def selftest(out):
     """Ładuje wszystkie moduły i sprawdza najważniejsze możliwości. Zapisuje raport JSON."""
     report = {"ok": True, "modules": {}, "python": sys.version}
     mods = ["pd_common", "pd_install", "pd_theme", "pd_ui", "pd_host", "pd_viewer", "pd_media", "pd_clipfiles",
-            "pd_winutil", "pd_update", "pd_service", "pd_kvm", "pd_discovery", "customtkinter", "mss", "numpy", "PIL.ImageTk", "pynput",
+            "pd_winutil", "pd_update", "pd_service", "pd_kvm", "pd_discovery", "pd_net", "truststore", "certifi", "customtkinter", "mss", "numpy", "PIL.ImageTk", "pynput",
             "pyperclip", "cryptography", "av"]
     if sys.platform == "win32":
         mods += ["pystray", "soundcard", "win32serviceutil", "servicemanager", "win32ts", "win32profile",
@@ -63,6 +63,11 @@ def selftest(out):
     except Exception as e:
         report["media_error"] = str(e)
         report["ok"] = False
+    try:
+        import pd_net
+        report["tls_context"] = type(pd_net.ssl_context()).__module__
+    except Exception as e:
+        report["tls_error"] = str(e)
     try:
         import pd_theme
         report["fonts_bundled"] = os.path.isdir(pd_theme.resource("fonts"))

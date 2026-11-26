@@ -1,5 +1,9 @@
 # Co nowego w PilotDesk
 
+## 3.4
+- Naprawione sprawdzanie i pobieranie aktualizacji na komputerach, na których program błędnie zgłaszał brak internetu (np. z drugą kartą sieciową do drukarki): systemowa weryfikacja certyfikatów Windows, zapasowy DNS i obsługa proxy.
+- Komunikat podaje prawdziwą przyczynę błędu, a przycisk „Diagnostyka” w zakładce Aktualizacje sprawdza DNS, proxy i certyfikat.
+
 ## 3.3
 - Naprawione łączenie z komputerem widocznym na liście „W Twojej sieci”, gdy jego zapora blokuje połączenia przychodzące – PilotDesk prosi wtedy o połączenie zwrotne.
 - Gdy port 47800 jest zajęty lub zarezerwowany przez Windows (Hyper-V, WSL, Docker), program sam wybiera inny.

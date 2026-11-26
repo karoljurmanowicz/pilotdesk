@@ -10,7 +10,6 @@ import json
 import os
 import re
 import tempfile
-import urllib.request
 
 UA = {"User-Agent": "PilotDesk-updater", "Accept": "application/vnd.github+json"}
 
@@ -25,8 +24,8 @@ def newer(a, b):
 
 
 def _get(url, timeout=20):
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
-        return r.read()
+    import pd_net
+    return pd_net.get_bytes(url, timeout)
 
 
 def check(source):
@@ -67,19 +66,23 @@ def download(info, dest=None, progress=None):
     dest = dest or os.path.join(tempfile.gettempdir(), f"PilotDesk-{parse_version(info['version'])}.exe")
     h = hashlib.sha256()
     tmp = dest + ".part"
-    with urllib.request.urlopen(urllib.request.Request(info["url"], headers={"User-Agent": UA["User-Agent"]}),
-                                timeout=60) as r, open(tmp, "wb") as f:
-        total = int(r.headers.get("Content-Length") or 0)
-        got = 0
-        while True:
-            chunk = r.read(256 * 1024)
-            if not chunk:
-                break
-            f.write(chunk)
-            h.update(chunk)
-            got += len(chunk)
-            if progress:
-                progress(got, total)
+    import pd_net
+    r = pd_net.open_url(info["url"], timeout=60)
+    try:
+        with open(tmp, "wb") as f:
+            total = int(r.getheader("Content-Length") or 0)
+            got = 0
+            while True:
+                chunk = r.read(256 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+                h.update(chunk)
+                got += len(chunk)
+                if progress:
+                    progress(got, total)
+    finally:
+        r._pd_conn.close()
     if info.get("sha256") and h.hexdigest().lower() != info["sha256"].lower():
         os.remove(tmp)
         raise ValueError("Suma kontrolna pobranego pliku się nie zgadza – aktualizacja przerwana.")

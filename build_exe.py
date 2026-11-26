@@ -36,7 +36,7 @@ def main():
     args = [
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--windowed",
         "--name", "PilotDesk", "--icon", ico, "--version-file", ver_file,
-        "--collect-data", "customtkinter", "--collect-data", "soundcard", "--collect-submodules", "av",
+        "--collect-data", "customtkinter", "--collect-data", "certifi", "--hidden-import", "truststore", "--collect-data", "soundcard", "--collect-submodules", "av",
         "--add-data", os.path.join(HERE, "fonts") + os.pathsep + "fonts",
         "--add-data", os.path.join(HERE, "CHANGELOG.md") + os.pathsep + ".",
         "--hidden-import", "pynput.keyboard._win32", "--hidden-import", "pynput.mouse._win32",
