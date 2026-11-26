@@ -91,6 +91,8 @@ class HostService:
         self._relay_sock = None
         self.caps = host_caps()
         self.discovery = None
+        self.listen_port_actual = 0
+        self._callbacks = []
 
     # ---------------------------------------------------------------- start / stop
     def start(self):
@@ -109,7 +111,7 @@ class HostService:
             self._set_status(relay="nie skonfigurowano")
         if self.cfg.get("direct_enabled", True) and not self.discovery:
             import pd_discovery
-            self.discovery = pd_discovery.Responder(self._discovery_info)
+            self.discovery = pd_discovery.Responder(self._discovery_info, on_callback=self._callback)
             if not self.discovery.start():
                 self.discovery = None
 
@@ -117,7 +119,22 @@ class HostService:
         if not self.running or not self.cfg.get("direct_enabled", True):
             return None
         return {"id": self.cfg.get("host_id"), "name": hostname(), "os": f"{platform.system()} {platform.release()}",
-                "port": int(self.cfg.get("listen_port", DEFAULT_PORT))}
+                "port": int(self.listen_port_actual or 0), "callback": True}
+
+    def _callback(self, ip, port):
+        """Połączenie zwrotne: klient nie może się do nas dodzwonić (zapora), więc to my łączymy się z nim.
+        Łączymy się tylko z adresem, z którego przyszła prośba, i najwyżej 6 razy na minutę."""
+        now = time.time()
+        self._callbacks = [t for t in self._callbacks if now - t < 60]
+        if not self.running or len(self._callbacks) >= 6 or not (1 <= int(port) <= 65535):
+            return
+        self._callbacks.append(now)
+        try:
+            sock = open_tcp(ip, int(port), timeout=6)
+        except OSError as e:
+            self.log(f"Połączenie zwrotne do {ip} nieudane: {e}")
+            return
+        self.handle_conn(sock, f"{ip} (połączenie zwrotne)")
 
     def stop(self, kick=True):
         self.running = False
@@ -129,6 +146,7 @@ class HostService:
                 except OSError:
                     pass
         self._listen_sock = self._relay_sock = None
+        self.listen_port_actual = 0
         if self.discovery:
             self.discovery.stop()
             self.discovery = None
@@ -155,9 +173,15 @@ class HostService:
 
     # ---------------------------------------------------------------- połączenia bezpośrednie
     def _listen_loop(self, gen):
-        port = int(self.cfg.get("listen_port", DEFAULT_PORT))
+        """Nasłuch TCP. Gdy port jest zajęty albo zarezerwowany przez Windows (Hyper-V/WSL/Docker),
+        używamy zapasowego – wyszukiwanie po ID i tak poda klientom właściwy port."""
+        want = int(self.cfg.get("listen_port", DEFAULT_PORT))
+        candidates = [want, want] + [p for p in (47810, 47820, 47830, 47850, 47890, 48800, 58800) if p != want] + [0]
         s = None
-        for attempt in range(10):  # po restarcie usługi port bywa przez chwilę zajęty
+        last_err = None
+        for port in candidates:
+            if not self._alive(gen):
+                return
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 if sys.platform != "win32":
@@ -166,13 +190,19 @@ class HostService:
                 s.listen(16)
                 break
             except OSError as e:
+                last_err = e
                 s.close()
                 s = None
-                if attempt == 9 or not self._alive(gen):
-                    self.log(f"Nie mogę otworzyć portu {port}: {e}")
-                    self._set_status(direct=f"błąd portu {port}")
-                    return
-                time.sleep(1)
+                if port == want and getattr(e, "errno", None) in (98, 48, 10048):  # zajęty – może zaraz się zwolni
+                    time.sleep(0.7)
+        if s is None:
+            self.log(f"Nie mogę otworzyć żadnego portu TCP: {last_err}")
+            self._set_status(direct="błąd portu")
+            return
+        port = s.getsockname()[1]
+        self.listen_port_actual = port
+        if port != want:
+            self.log(f"Port {want} jest zajęty lub zablokowany przez system ({last_err}) – używam portu {port}")
         self._listen_sock = s
         self._set_status(direct=f"port {port}")
         self.log(f"Czekam na połączenia bezpośrednie na porcie {port}")

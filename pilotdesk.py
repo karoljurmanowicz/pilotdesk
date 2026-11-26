@@ -781,6 +781,21 @@ class App:
         elif st == "notice" and txt:
             self.toast(txt, "ok")
 
+    def _fix_firewall(self):
+        import pd_winutil as W
+        exe = sys.executable if INST.is_frozen() else os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        rule = (f'netsh advfirewall firewall delete rule name="PilotDesk" & '
+                f'netsh advfirewall firewall add rule name="PilotDesk" dir=in action=allow program="{exe}" '
+                f'enable=yes profile=any & '
+                f'netsh advfirewall firewall add rule name="PilotDesk" dir=in action=allow protocol=UDP localport=47802 '
+                f'enable=yes profile=any')
+        try:
+            code = W.run_elevated("cmd.exe", f"/c {rule}", wait=True)
+            self.toast("Zapora ustawiona – PilotDesk może przyjmować połączenia." if code == 0 else
+                       f"Zapora: polecenie zakończyło się kodem {code}.", "ok" if code == 0 else "warn", 5000)
+        except OSError as e:
+            self.toast(str(e), "error")
+
     def _clear_trusted(self):
         if self.hcfg.get("trusted") and self.U.confirm(self.root, "Wyczyścić zapamiętane komputery?",
                                                          "Następnym razem będą znów prosić o akceptację.", "Wyczyść",
@@ -815,6 +830,10 @@ class App:
                               "Ktoś może poprosić o dostęp – połączy się dopiero, gdy klikniesz „Akceptuj”.")
         self.a_ask_var = ctk.BooleanVar(value=bool(self.hcfg.get("ask_enabled", True)))
         U.switch(r.right, "", self.a_ask_var, command=self._toggle_ask).pack()
+        if INST.is_windows():
+            r = self._setting_row(c, "Zapora Windows", "Gdy inne komputery widzą ten komputer, ale nie mogą się połączyć – "
+                                                       "doda regułę zezwalającą PilotDesk (zgoda administratora).")
+            U.secondary_button(r.right, "Napraw zaporę", self._fix_firewall, width=120).pack()
         self.r_trust = self._setting_row(c, "Zapamiętane komputery", "…")
         U.secondary_button(self.r_trust.right, "Wyczyść", self._clear_trusted, width=120).pack()
         self.r_svc = self._setting_row(c, "Usługa systemowa",
@@ -1254,24 +1273,54 @@ class App:
         self.connect_btn.configure(state="disabled" if on else "normal", text="Łączenie…" if on else "Połącz")
 
     def _connect_by_id(self, host_id):
-        """ID -> połączenie: najpierw szukamy w sieci lokalnej i Tailscale, potem przez serwer pośredniczący."""
+        """ID -> połączenie. Kolejno: sieć lokalna / Tailscale (bezpośrednio), połączenie zwrotne
+        (gdy zapora tamtego komputera blokuje połączenia przychodzące), serwer pośredniczący."""
         import pd_discovery
         e = self._book_entry(host_id) or {}
         found = pd_discovery.discover(want_id=host_id, timeout=1.5, extra=[e.get("ip")],
                                       exclude_id=self.hcfg.get("host_id")).get(host_id)
+        problems = []
         if found:
-            try:
-                sock = open_tcp(found["ip"], found["port"], timeout=6)
-                if e:
-                    e["ip"] = found["ip"]
-                return sock
-            except OSError:
-                pass
+            name = found.get("name") or format_id(host_id)
+            for ip in found.get("ips") or [found["ip"]]:
+                if not found.get("port"):
+                    problems.append(f"{ip}: na tamtym komputerze nie działa nasłuch (zablokowany port)")
+                    break
+                try:
+                    sock = open_tcp(ip, found["port"], timeout=5)
+                    if e:
+                        e["ip"] = ip
+                    return sock
+                except OSError as ex:
+                    problems.append(f"{ip}:{found['port']} – {self._neterr(ex)}")
+            if found.get("callback"):
+                for ip in found.get("ips") or [found["ip"]]:
+                    try:
+                        sock = pd_discovery.request_callback(ip, host_id)
+                        if e:
+                            e["ip"] = ip
+                        return sock
+                    except OSError as ex:
+                        problems.append(f"połączenie zwrotne z {ip} – {self._neterr(ex)}")
         relay = self.hcfg.get("relay", "")
         if relay:
             return relay_connect_viewer(relay, self.hcfg.get("relay_key", ""), host_id)
-        raise ConnectionError(f"Nie znaleziono komputera {format_id(host_id)}. Sprawdź, czy jest włączony i ma "
-                              "włączony „Zdalny dostęp”, oraz czy oba komputery są w tej samej sieci albo w Tailscale.")
+        if found:
+            raise ConnectionError(
+                f"Komputer {name} jest widoczny w sieci, ale nie przyjmuje połączenia ({problems[0] if problems else '?'}). "
+                f"Na komputerze {name} otwórz PilotDesk → Dostęp → „Napraw zaporę” i spróbuj ponownie.")
+        raise ConnectionError(
+            f"Nie znaleziono komputera {format_id(host_id)}. Sprawdź, czy jest włączony i ma włączony „Zdalny dostęp”. "
+            "Przez internet (poza siecią domową) komputery łączą się, gdy oba mają Tailscale albo ustawiony "
+            "serwer pośredniczący.")
+
+    @staticmethod
+    def _neterr(ex):
+        if isinstance(ex, ConnectionRefusedError):
+            return "odmowa połączenia"
+        if isinstance(ex, (TimeoutError,)) or ex.__class__.__name__ == "timeout":
+            return "brak odpowiedzi (zapora?)"
+        return str(ex.strerror or ex)[:60]
 
     def open_connection(self, target, password="", mode=None, saved=None, on_code=None, extra=None):
         """Nawiązuje połączenie (blokuje – wołać z wątku). Zwraca (kanał, hello, ok, klucz_hasła)."""

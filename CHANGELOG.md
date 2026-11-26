@@ -1,5 +1,11 @@
 # Co nowego w PilotDesk
 
+## 3.3
+- Naprawione łączenie z komputerem widocznym na liście „W Twojej sieci”, gdy jego zapora blokuje połączenia przychodzące – PilotDesk prosi wtedy o połączenie zwrotne.
+- Gdy port 47800 jest zajęty lub zarezerwowany przez Windows (Hyper-V, WSL, Docker), program sam wybiera inny.
+- Dokładniejsze komunikaty o błędach połączenia.
+- Przycisk „Napraw zaporę” w zakładce Dostęp.
+
 ## 3.2
 - Nowa zakładka **Aktualizacje**: sprawdzanie i instalowanie nowych wersji jednym kliknięciem, z paskiem postępu i listą zmian.
 - „Sprawdź aktualizacje” także w menu ikony przy zegarze.

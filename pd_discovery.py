@@ -22,8 +22,9 @@ MAGIC = "pilotdesk-discovery-1"
 class Responder:
     """Strona udostępniająca: odpowiada „tu jestem” (ID, nazwa, port)."""
 
-    def __init__(self, info_fn):
+    def __init__(self, info_fn, on_callback=None):
         self.info_fn = info_fn  # -> dict albo None (gdy nie odpowiadać)
+        self.on_callback = on_callback  # (ip, port) – prośba o połączenie zwrotne
         self.sock = None
         self.running = False
 
@@ -60,6 +61,11 @@ class Responder:
                 if not info:
                     continue
                 if m.get("id") and m["id"] != info["id"]:
+                    continue
+                if m.get("op") == "callback":
+                    if self.on_callback and m.get("id") == info["id"]:
+                        threading.Thread(target=self.on_callback, args=(addr[0], int(m.get("port", 0))),
+                                         daemon=True).start()
                     continue
                 self.sock.sendto(json.dumps({"magic": MAGIC, "op": "here", **info}).encode("utf-8"), addr)
             except OSError:
@@ -158,13 +164,48 @@ def discover(want_id=None, timeout=1.2, extra=(), exclude_id=None):
         ip = addr[0]
         prev = found.get(m["id"])
         via = "Tailscale" if ip.startswith("100.") else via_of.get(ip, "sieć lokalna")
+        ips = (prev or {}).get("ips", [])
+        if ip not in ips:
+            ips = [i for i in ips + [ip]]
+            ips.sort(key=lambda i: i.startswith("100."))  # najpierw sieć lokalna (szybsza), potem Tailscale
         # wolimy adres z sieci lokalnej (szybszy) od Tailscale
         if not prev or (prev["ip"].startswith("100.") and not ip.startswith("100.")):
             found[m["id"]] = {"ip": ip, "port": int(m.get("port", 47800)), "name": m.get("name", ""),
-                              "os": m.get("os", ""), "via": via}
+                              "os": m.get("os", ""), "via": via, "callback": bool(m.get("callback"))}
+        found[m["id"]]["ips"] = ips
         if want_id and want_id in found and not found[want_id]["ip"].startswith("100."):
             break
         if want_id and want_id in found and time.time() > end - timeout * 0.6:
             break
     s.close()
     return found
+
+
+def request_callback(ip, host_id, timeout=7):
+    """Prosi komputer o połączenie zwrotne: nasłuchujemy chwilowo na losowym porcie TCP, a on się z nami łączy.
+    Pomaga, gdy zapora tamtego komputera blokuje połączenia przychodzące."""
+    from pd_common import tune_socket
+    ls = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    ls.bind(("0.0.0.0", 0))
+    ls.listen(2)
+    ls.settimeout(timeout)
+    port = ls.getsockname()[1]
+    u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    msg = json.dumps({"magic": MAGIC, "op": "callback", "id": host_id, "port": port}).encode("utf-8")
+    try:
+        conn = None
+        end = time.time() + timeout
+        while conn is None:
+            u.sendto(msg, (ip, DISCOVERY_PORT))  # UDP bywa gubiony – ponawiamy co 2 s
+            ls.settimeout(max(0.1, min(2.0, end - time.time())))
+            try:
+                conn, _addr = ls.accept()
+            except socket.timeout:
+                if time.time() >= end:
+                    raise TimeoutError("brak połączenia zwrotnego")
+        conn.settimeout(None)
+        tune_socket(conn)
+        return conn
+    finally:
+        u.close()
+        ls.close()
