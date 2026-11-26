@@ -347,8 +347,12 @@ class HostService:
                 self.on_sessions()
             sess.run()
         except Exception as e:
-            self.log(f"Błąd połączenia ({peer}): {e}")
-            _log(f"Błąd połączenia ({peer}): {e!r}")
+            if sess is None and isinstance(e, ConnectionError):
+                # druga strona rozłączyła się przed zalogowaniem – zwykle „Sprawdź połączenie” albo wyszukiwanie
+                _log(f"Połączenie od {peer} zakończone przed zalogowaniem ({e})")
+            else:
+                self.log(f"Błąd połączenia ({peer}): {e}")
+                _log(f"Błąd połączenia ({peer}): {e!r}")
             if not hello_sent[0]:
                 _refuse(sock, f"Błąd na komputerze zdalnym: {e}")
         finally:
