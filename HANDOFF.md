@@ -1,6 +1,6 @@
 # PilotDesk – przekazanie projektu (handoff)
 
-Stan na: 2026-11-26 · wersja **3.7** (wydawana przez CI) · repozytorium **github.com/karoljurmanowicz/pilotdesk** (publiczne)
+Stan na: 2026-11-26 · wersja **3.8** (wydawana przez CI) · repozytorium **github.com/karoljurmanowicz/pilotdesk** (publiczne)
 
 Ten plik jest dla osoby (lub kolejnej sesji Claude), która przejmuje prace. Najpierw przeczytaj
 **„Otwarte problemy”** – pierwszy z nich zgłosił użytkownik tuż przed przekazaniem.
@@ -74,6 +74,14 @@ Dzienniki usługi: `%PROGRAMDATA%\PilotDesk\logs\{service,agent,install-service}
 obraz, kliknięcia (SendInput OK), wyszukiwanie po ID, odinstalowanie – wszystko działa. Niesprawdzone: tryb
 „Akceptuj/Odrzuć” przez okno (kanał 127.0.0.1:47803), ekran logowania/UAC. Zapora na maszynach CI jest zapewne
 wyłączona, więc sama reguła zapory nie jest tam weryfikowana.
+
+### 3.1c [OTWARTE] PC 2 po ponownej instalacji: „Połączenie zostało zamknięte”
+PC 2 zawieszał się, użytkownik odinstalował i zainstalował program od nowa (nowe ID **142 818 599**).
+PC 1 widzi go w „W Twojej sieci”, ale łączenie (bez hasła, tryb „Akceptuj/Odrzuć”) kończy się
+„Połączenie zostało zamknięte” = host zamknął gniazdo **przed wysłaniem hello** (ciche `return` przy blokadzie
+`Lockout` albo wyjątek w `handle_conn`). 3.8: host wysyła jawną odmowę `{"app","proto","error"}`
+(`pd_host._refuse`), klient pokazuje powód (`viewer_handshake`), dziennik zapisuje każde połączenie
+przychodzące. Przyczyna nieznana – potrzebny `pilotdesk.log` z PC 2 i komunikat z PC 1 po aktualizacji do 3.8.
 
 ### 3.2 Łączenie przez internet (bez wspólnej sieci) – czeka na użytkownika
 Gotowe: `pd_relay.py` (serwer asyncio, bez zależności) + `scripts/install_relay.sh` (jedno polecenie:

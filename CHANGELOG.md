@@ -1,5 +1,9 @@
 # Co nowego w PilotDesk
 
+## 3.8
+- Zamiast ogólnego „Połączenie zostało zamknięte” PilotDesk pokazuje prawdziwy powód, dla którego komputer zdalny odmówił połączenia (np. blokada po zbyt wielu nieudanych próbach logowania – z czasem do odblokowania – albo błąd po tamtej stronie).
+- Dziennik zdarzeń zapisuje każde połączenie przychodzące i jego błędy.
+
 ## 3.7
 - Naprawione: po włączeniu usługi systemowej nie można było połączyć się z komputerem – zapora Windows blokowała usługę (działa ona z osobnej kopii programu, której nie obejmowała dotychczasowa reguła). Usługa sama dodaje teraz regułę zapory, także na komputerach, na których została zainstalowana wcześniej.
 - Zapamiętane komputery („Zapamiętaj ten komputer”) działają także w trybie usługi.

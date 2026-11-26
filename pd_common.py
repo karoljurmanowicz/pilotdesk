@@ -29,7 +29,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 APP_NAME = "PilotDesk"
-VERSION = "3.7"
+VERSION = "3.8"
 DEFAULT_UPDATE_SOURCE = "karoljurmanowicz/pilotdesk"  # GitHub: właściciel/repozytorium (zakładka Releases)
 PROTO = 2
 DEFAULT_PORT = 47800        # połączenia bezpośrednie (LAN / VPN / przekierowanie portu)
@@ -482,7 +482,14 @@ def host_handshake(sock, cfg, info, ask_cb=None):
 
 def viewer_handshake(sock, key_provider, client_info, mode="password", on_code=None, dev_key=None):
     """key_provider(salt) -> klucz hasła; w trybie 'ask' nie jest wołany. on_code(kod) – kod weryfikacyjny."""
-    hello = recv_plain(sock)
+    try:
+        hello = recv_plain(sock)
+    except ConnectionError:
+        raise ConnectionError("Komputer zdalny od razu zamknął połączenie. Na tamtym komputerze sprawdź, czy "
+                              "PilotDesk działa i ma włączony „Zdalny dostęp” (szczegóły: Ustawienia → Dziennik "
+                              "zdarzeń).") from None
+    if hello.get("error"):
+        raise AuthError(str(hello["error"]))
     if hello.get("app") != APP_NAME:
         raise ProtocolError("Po drugiej stronie nie działa PilotDesk")
     if hello.get("proto") != PROTO:

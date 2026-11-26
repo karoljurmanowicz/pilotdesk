@@ -296,9 +296,14 @@ class HostService:
     # ---------------------------------------------------------------- obsługa sesji
     def handle_conn(self, sock, peer):
         sess = None
+        hello_sent = [False]
         try:
+            _log(f"Połączenie przychodzące od {peer}")
             if not self.lockout.allowed():
+                left = max(1, int(self.lockout.until - time.time()))
                 self.log(f"Odrzucono połączenie ({peer}) – blokada po zbyt wielu błędnych hasłach")
+                _refuse(sock, f"Zbyt wiele nieudanych prób logowania – komputer zdalny przyjmie połączenie za "
+                                   f"{left} s.")
                 return
             sock.settimeout(20)
             info = {"name": hostname(), "os": f"{platform.system()} {platform.release()}", "mac": get_mac(),
@@ -320,6 +325,7 @@ class HostService:
                             self.save_cfg()
                         self.log(f"Zapamiętano komputer {client} – następnym razem połączy się bez pytania")
                     return bool(ok)
+            hello_sent[0] = True
             try:
                 ch, auth, mode = host_handshake(sock, self.cfg, info, ask_cb=ask_cb)
             except AuthError:
@@ -342,6 +348,9 @@ class HostService:
             sess.run()
         except Exception as e:
             self.log(f"Błąd połączenia ({peer}): {e}")
+            _log(f"Błąd połączenia ({peer}): {e!r}")
+            if not hello_sent[0]:
+                _refuse(sock, f"Błąd na komputerze zdalnym: {e}")
         finally:
             try:
                 sock.close()
@@ -353,6 +362,17 @@ class HostService:
                 self.log(f"Rozłączono: {sess.client}")
                 if self.on_sessions:
                     self.on_sessions()
+
+
+def _refuse(sock, reason):
+    """Odmowa przed uzgadnianiem: jawna wiadomość zamiast cichego zamknięcia (klient pokaże powód)."""
+    try:
+        from pd_common import APP_NAME, PROTO, send_plain
+        sock.settimeout(3)
+        send_plain(sock, {"app": APP_NAME, "proto": PROTO, "error": reason})
+    except Exception:
+        pass
+
 
 
 class HostSession:
