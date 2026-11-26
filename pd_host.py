@@ -70,8 +70,10 @@ class HostService:
     ask(klient, adres, kod) -> bool  – pytanie „Akceptuj/Odrzuć” (None = tryb bez hasła wyłączony)
     agent_mode – proces agenta usługi Windows (przełączanie na ekran logowania / UAC)."""
 
-    def __init__(self, cfg, log=None, on_chat=None, on_sessions=None, on_status=None, ask=None, agent_mode=False):
+    def __init__(self, cfg, log=None, on_chat=None, on_sessions=None, on_status=None, ask=None, agent_mode=False,
+                 save_cfg=None):
         self.cfg = cfg
+        self.save_cfg = save_cfg
         self.log = log or (lambda m: print(time.strftime("%H:%M:%S"), m, flush=True))
         self.on_chat = on_chat
         self.on_sessions = on_sessions
@@ -88,6 +90,7 @@ class HostService:
         self._listen_sock = None
         self._relay_sock = None
         self.caps = host_caps()
+        self.discovery = None
 
     # ---------------------------------------------------------------- start / stop
     def start(self):
@@ -104,6 +107,17 @@ class HostService:
             threading.Thread(target=self._relay_loop, args=(gen,), daemon=True).start()
         else:
             self._set_status(relay="nie skonfigurowano")
+        if self.cfg.get("direct_enabled", True) and not self.discovery:
+            import pd_discovery
+            self.discovery = pd_discovery.Responder(self._discovery_info)
+            if not self.discovery.start():
+                self.discovery = None
+
+    def _discovery_info(self):
+        if not self.running or not self.cfg.get("direct_enabled", True):
+            return None
+        return {"id": self.cfg.get("host_id"), "name": hostname(), "os": f"{platform.system()} {platform.release()}",
+                "port": int(self.cfg.get("listen_port", DEFAULT_PORT))}
 
     def stop(self, kick=True):
         self.running = False
@@ -115,6 +129,9 @@ class HostService:
                 except OSError:
                     pass
         self._listen_sock = self._relay_sock = None
+        if self.discovery:
+            self.discovery.stop()
+            self.discovery = None
         if kick:
             self.disconnect_all()
         self._set_status(direct="wyłączone", relay="wyłączony")
@@ -248,10 +265,21 @@ class HostService:
                     "caps": self.caps, "service": self.agent_mode}
             ask_cb = None
             if self.ask:
-                def ask_cb(client, code):
+                def ask_cb(client, code, dev):
+                    trusted = {t.get("pub") for t in self.cfg.get("trusted", [])}
+                    if dev and dev in trusted:
+                        self.log(f"Zapamiętany komputer łączy się bez pytania: {client} ({peer})")
+                        return True
                     sock.settimeout(90)
-                    self.log(f"Prośba o połączenie bez hasła: {client} ({peer}), kod {code}")
-                    return bool(self.ask(client, peer, code))
+                    self.log(f"Prośba o połączenie: {client} ({peer}), kod {code}")
+                    r = self.ask(client, peer, code, dev)
+                    ok, remember = (r if isinstance(r, tuple) else (r, False))
+                    if ok and remember and dev:
+                        self.cfg.setdefault("trusted", []).append({"pub": dev, "name": client, "added": int(time.time())})
+                        if self.save_cfg:
+                            self.save_cfg()
+                        self.log(f"Zapamiętano komputer {client} – następnym razem połączy się bez pytania")
+                    return bool(ok)
             try:
                 ch, auth, mode = host_handshake(sock, self.cfg, info, ask_cb=ask_cb)
             except AuthError:
@@ -316,6 +344,7 @@ class HostSession:
         self.privacy = None
         self.blocked = False
         self.clip = None
+        self.video_on = auth.get("video", True) is not False
 
     # ---------------------------------------------------------------- pętla główna
     def stop(self):
@@ -427,6 +456,10 @@ class HostSession:
                     self.send_json({"t": "monitors", "list": desc, "current": idx})
                 mon = mons[idx]
                 self.cur_mon = mon
+                if not self.video_on:  # tryb wspólnej myszy – bez obrazu, tylko pozycje monitorów
+                    prev = None
+                    time.sleep(0.5)
+                    continue
                 shot = sct.grab(mon)
             except Exception:
                 try:
@@ -690,6 +723,9 @@ class HostSession:
                 self.monitor = int(m.get("index", 1))
                 self.force_full = True
             elif t == "refresh":
+                self.force_full = True
+            elif t == "video":
+                self.video_on = bool(m.get("on", True))
                 self.force_full = True
             elif t == "audio":
                 self._set_audio(bool(m.get("on")))

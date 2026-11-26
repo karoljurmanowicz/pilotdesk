@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pd_install as INST  # noqa: E402
 from pd_common import (  # noqa: E402
-    DEFAULT_PORT, VERSION, AuthError, b64d, b64e, config_path, derive_password_key, ensure_host_identity,
+    DEFAULT_PORT, VERSION, AuthError, b64d, b64e, config_path, derive_password_key, device_key, ensure_host_identity,
     format_id, get_local_ips, has_password, host_config_path, hostname, load_config, machine_config_path,
     open_tcp, parse_target, relay_connect_viewer, save_config, send_wol, service_mode, set_host_password,
     update_source, username, viewer_handshake,
@@ -143,6 +143,8 @@ class App:
         self.connecting = False
         self.sessions_win = None
         self.update_info = None
+        self.kvm_link = None
+        self.kvm_switch = None
         self._load_host_cfg()
 
         root.title("PilotDesk")
@@ -162,6 +164,7 @@ class App:
         self.pages = {}
         self._build_connect_page()
         self._build_computers_page()
+        self._build_kvm_page()
         self._build_access_page()
         self._build_settings_page()
         self.show_page("connect")
@@ -175,6 +178,7 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         root.after(100, self._poll)
         root.after(15000, self._auto_update_tick)
+        root.after(1200, self._nearby_tick)
         if minimized:
             root.withdraw() if self.tray else root.iconify()
 
@@ -211,6 +215,7 @@ class App:
         group("połączenia")
         self.nav["connect"] = NavItem(self, sb, "connect", "Połącz", "connect")
         self.nav["computers"] = NavItem(self, sb, "computers", "Komputery", "computers")
+        self.nav["kvm"] = NavItem(self, sb, "kvm", "Mysz i klawiatura", "mouse")
         group("ten komputer")
         self.nav["access"] = NavItem(self, sb, "access", "Dostęp", "shield")
         group("aplikacja")
@@ -238,6 +243,8 @@ class App:
             else:
                 page.grid_forget()
         self.current_page = key
+        if key == "connect" and hasattr(self, "nearby"):
+            self._scan_nearby()
 
     def show_connect(self):
         self.show_window()
@@ -286,7 +293,7 @@ class App:
     # ================================================================ strona: Połącz
     def _build_connect_page(self):
         ctk, T, U = self.ctk, self.T, self.U
-        p = self._page("connect", "Połącz", "Wpisz ID lub adres IP komputera. Hasło jest opcjonalne.")
+        p = self._page("connect", "Połącz", "Wybierz komputer z listy „W Twojej sieci” albo wpisz jego ID. Hasło jest opcjonalne.")
         row = ctk.CTkFrame(p, fg_color="transparent")
         row.pack(fill="x", padx=40, pady=(18, 0))
         row.grid_columnconfigure(0, weight=3)
@@ -343,10 +350,71 @@ class App:
         self.c_state = U.label(hi, "", 12, color=T.TEXT_2)
         self.c_state.pack(anchor="w", pady=(4, 0))
 
+        U.section(p, "w twojej sieci", padx=40, pady=(28, 10),
+                  right=lambda m: U.icon_button(m, "refresh", lambda: self._scan_nearby(force=True), tip="Szukaj ponownie",
+                                                width=26, height=26, size=14))
+        self.nearby = U.card(p)
+        self.nearby.pack(fill="x", padx=40)
+        self.nearby_found = {}
+        self.nearby_scanning = False
+        self._fill_nearby()
         U.section(p, "ostatnie", padx=40, pady=(28, 10))
         self.recent = U.card(p)
         self.recent.pack(fill="x", padx=40, pady=(0, 34))
         self._fill_recent()
+
+    # ---------------------------------------------------------------- komputery w sieci
+    def _scan_nearby(self, force=False):
+        if self.nearby_scanning:
+            return
+        visible = self.root.state() != "withdrawn" and getattr(self, "current_page", "") == "connect"
+        if not (visible or force):
+            return
+        self.nearby_scanning = True
+
+        def work():
+            import pd_discovery
+            try:
+                extra = [e.get("ip") for e in self.cfg.get("book", []) if e.get("ip")]
+                found = pd_discovery.discover(timeout=1.5, extra=extra, exclude_id=self.hcfg.get("host_id"))
+            except Exception:
+                found = {}
+            self.post("nearby", found)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _nearby_tick(self):
+        self._scan_nearby()
+        self.root.after(10000, self._nearby_tick)
+
+    def _fill_nearby(self):
+        ctk, T, U = self.ctk, self.T, self.U
+        for w in self.nearby.winfo_children():
+            w.destroy()
+        if not self.nearby_found:
+            U.label(self.nearby, "Szukam komputerów z PilotDesk w sieci lokalnej i Tailscale…" if self.nearby_scanning
+                    else "Brak innych komputerów z włączonym PilotDesk. Na drugim komputerze włącz „Zdalny dostęp”.",
+                    12, color=T.TEXT_3).pack(anchor="w", padx=18, pady=16)
+            return
+        for i, (hid, d) in enumerate(sorted(self.nearby_found.items(), key=lambda x: x[1]["name"].lower())):
+            if i:
+                U.hairline(self.nearby, fill="x", padx=16)
+            r = ctk.CTkFrame(self.nearby, fg_color="transparent", height=58)
+            r.pack(fill="x", padx=16)
+            r.pack_propagate(False)
+            box = ctk.CTkFrame(r, fg_color=T.SURFACE_2, corner_radius=8, width=34, height=34, border_width=1,
+                               border_color=T.BORDER)
+            box.pack(side="left")
+            box.pack_propagate(False)
+            ctk.CTkLabel(box, text="", image=T.icon("monitor", 16)).pack(expand=True)
+            txt = ctk.CTkFrame(r, fg_color="transparent")
+            txt.pack(side="left", padx=12)
+            top = ctk.CTkFrame(txt, fg_color="transparent")
+            top.pack(anchor="w", pady=(9, 0))
+            U.dot(top, T.GREEN, 7).pack(side="left")
+            U.label(top, d["name"][:32] or format_id(hid), 13, "medium").pack(side="left", padx=(4, 0))
+            U.label(txt, f"ID {format_id(hid)}  ·  {d['via']}  ·  {d['os']}", 11, color=T.TEXT_3, mono=True).pack(anchor="w")
+            U.primary_button(r, "Połącz", lambda hid=hid, d=d: self.quick_connect(
+                self._book_entry(hid) or {"addr": hid, "name": d["name"]}), height=28, width=80).pack(side="right")
 
     def _toggle_pw(self):
         self.pw_shown = not self.pw_shown
@@ -423,6 +491,8 @@ class App:
         save_config(self.cfg)
         self._fill_book()
         self._fill_recent()
+        if hasattr(self, "kvm_menu"):
+            self._kvm_refresh_menu()
 
     def _book_menu(self, e, widget):
         items = [("Połącz", lambda: self.quick_connect(e)),
@@ -487,6 +557,235 @@ class App:
                     sent.append(f"przez {v.remote_name}")
         self.toast(f"Wysłano sygnał wybudzenia ({', '.join(sent)}). Spróbuj połączyć się za ~30 s.", "ok", 6000)
 
+    # ================================================================ strona: Mysz i klawiatura
+    def _kvm_cfg(self):
+        k = self.cfg.setdefault("kvm", {})
+        for key, val in (("side", "right"), ("offset", 0), ("delay", 0.0), ("clip", True), ("monitor", 1), ("target", "")):
+            k.setdefault(key, val)
+        return k
+
+    def _kvm_choices(self):
+        """Komputery do wyboru: zapisane + znalezione w sieci."""
+        out = {}
+        for e in self.cfg.get("book", []):
+            out[f"{(e.get('name') or e['addr'])[:28]}  ·  {e['addr']}"] = e["addr"]
+        for hid, d in getattr(self, "nearby_found", {}).items():
+            if not self._book_entry(hid):
+                out[f"{d['name'][:28]}  ·  {format_id(hid)}"] = hid
+        return out
+
+    def _build_kvm_page(self):
+        ctk, T, U = self.ctk, self.T, self.U
+        import pd_kvm
+        k = self._kvm_cfg()
+        p = self._page("kvm", "Mysz i klawiatura",
+                       "Steruj komputerem obok tą samą myszą i klawiaturą – przesuń kursor za krawędź ekranu.")
+        c = U.card(p)
+        c.pack(fill="x", padx=40, pady=(18, 0))
+        r = self._setting_row(c, "Wspólna mysz i klawiatura", "Wyłączona.", first=True)
+        self.kvm_status = r.desc
+        self.kvm_var = ctk.BooleanVar(value=False)
+        U.switch(r.right, "", self.kvm_var, command=self._kvm_toggle).pack()
+        r = self._setting_row(c, "Komputer obok", "Najpierw włącz na nim „Zdalny dostęp”. Za pierwszym razem zaakceptuj "
+                                                  "połączenie i zaznacz „Zapamiętaj”.")
+        self.kvm_target = ctk.StringVar(value="")
+        self.kvm_menu = ctk.CTkOptionMenu(r.right, variable=self.kvm_target, values=["—"], width=260, height=32,
+                                          font=T.font(12), dropdown_font=T.font(12), fg_color=T.SURFACE_2,
+                                          button_color=T.SURFACE_3, button_hover_color=T.BORDER_STRONG,
+                                          text_color=T.TEXT, dropdown_fg_color=T.SURFACE, dropdown_text_color=T.TEXT,
+                                          dropdown_hover_color=T.SURFACE_3, command=lambda v: self._kvm_pick(v))
+        self.kvm_menu.pack()
+        self._kvm_refresh_menu()
+
+        U.section(p, "układ ekranów", padx=40)
+        c = U.card(p)
+        c.pack(fill="x", padx=40)
+        self.kvm_canvas = pd_kvm.ArrangementCanvas(c, 300, self._kvm_remote_info, self._kvm_layout_changed,
+                                                   dark=ctk.get_appearance_mode() == "Dark")
+        self.kvm_canvas.pack(fill="x", padx=14, pady=(14, 6))
+        self.kvm_canvas.set_layout({"side": k["side"], "offset": k["offset"]})
+        U.label(c, "Przeciągnij ekran komputera obok tam, gdzie naprawdę stoi. Zielona linia to krawędź, przez którą "
+                   "przechodzi kursor.", 12, color=T.TEXT_3, wraplength=700, justify="left").pack(anchor="w", padx=18, pady=(0, 14))
+
+        U.section(p, "opcje", padx=40)
+        c = U.card(p)
+        c.pack(fill="x", padx=40, pady=(0, 34))
+        r = self._setting_row(c, "Przejście przez krawędź", "„Po chwili” chroni przed przypadkowym przeskoczeniem kursora.",
+                              first=True)
+        self.kvm_delay = ctk.StringVar(value="Po chwili" if k["delay"] else "Od razu")
+        ctk.CTkSegmentedButton(r.right, values=["Od razu", "Po chwili"], variable=self.kvm_delay, font=T.font(12),
+                               height=30, corner_radius=8, selected_color=T.SURFACE_3, selected_hover_color=T.SURFACE_3,
+                               unselected_color=T.SURFACE_2, unselected_hover_color=T.SURFACE_3, text_color=T.TEXT,
+                               fg_color=T.SURFACE_2, command=lambda v: self._kvm_set("delay", 0.35 if v == "Po chwili" else 0.0)).pack()
+        r = self._setting_row(c, "Monitor komputera obok", "Na który monitor drugiego komputera przechodzi kursor.")
+        self.kvm_mon = ctk.StringVar(value=f"Monitor {k['monitor']}")
+        self.kvm_mon_menu = ctk.CTkOptionMenu(r.right, variable=self.kvm_mon, values=[f"Monitor {k['monitor']}"],
+                                              width=140, height=32, font=T.font(12), fg_color=T.SURFACE_2,
+                                              button_color=T.SURFACE_3, button_hover_color=T.BORDER_STRONG,
+                                              text_color=T.TEXT, dropdown_fg_color=T.SURFACE, dropdown_text_color=T.TEXT,
+                                              dropdown_hover_color=T.SURFACE_3, command=self._kvm_pick_monitor)
+        self.kvm_mon_menu.pack()
+        r = self._setting_row(c, "Schowek i pliki", "Ctrl+C na jednym komputerze, Ctrl+V na drugim – tekst i pliki.")
+        self.kvm_clip = ctk.BooleanVar(value=bool(k["clip"]))
+        U.switch(r.right, "", self.kvm_clip, command=lambda: self._kvm_set("clip", bool(self.kvm_clip.get()))).pack()
+        self._setting_row(c, "Powrót na ten komputer", "Przesuń kursor z powrotem przez zieloną krawędź albo naciśnij "
+                                                        "Ctrl+Alt+Esc.")
+
+    def _kvm_refresh_menu(self):
+        ch = self._kvm_choices()
+        self._kvm_map = ch
+        vals = list(ch) or ["Brak komputerów – połącz się raz w zakładce Połącz"]
+        self.kvm_menu.configure(values=vals)
+        k = self._kvm_cfg()
+        cur = next((lbl for lbl, a in ch.items() if a.replace(" ", "") == str(k["target"]).replace(" ", "")), None)
+        self.kvm_target.set(cur or (vals[0] if ch else vals[0]))
+        if not cur and ch:
+            k["target"] = ch[vals[0]]
+
+    def _kvm_pick(self, label):
+        addr = self._kvm_map.get(label)
+        if addr:
+            self._kvm_set("target", addr)
+            if self.kvm_link:  # zmiana komputera w trakcie – połącz z nowym
+                self._kvm_stop()
+                self.kvm_var.set(True)
+                self._kvm_toggle()
+            self.kvm_canvas.draw()
+
+    def _kvm_pick_monitor(self, label):
+        idx = int(label.split()[-1])
+        self._kvm_set("monitor", idx)
+        if self.kvm_link:
+            self.kvm_link.set_monitor(idx)
+        self.kvm_canvas.draw()
+
+    def _kvm_set(self, key, val):
+        self._kvm_cfg()[key] = val
+        save_config(self.cfg)
+        if self.kvm_switch:
+            self.kvm_switch.layout.update(self._kvm_cfg())
+
+    def _kvm_layout_changed(self, layout):
+        k = self._kvm_cfg()
+        k.update(layout)
+        save_config(self.cfg)
+        if self.kvm_switch:
+            self.kvm_switch.layout.update(layout)
+        side = {"right": "po prawej", "left": "po lewej", "top": "nad tym komputerem", "bottom": "pod tym komputerem"}[layout["side"]]
+        self.toast(f"Komputer obok: {side}.", "ok")
+
+    def _kvm_entry(self):
+        addr = self._kvm_cfg().get("target")
+        if not addr:
+            return None
+        e = self._book_entry(addr)
+        if not e:
+            d = getattr(self, "nearby_found", {}).get(addr, {})
+            e = {"addr": addr, "name": d.get("name") or addr}
+            self.cfg.setdefault("book", []).append(e)
+            self._refresh_book_views()
+        return e
+
+    def _kvm_remote_info(self):
+        tgt = self._kvm_cfg().get("target") or ""
+        e = self._book_entry(tgt) if tgt else None
+        if not e and tgt:
+            d = getattr(self, "nearby_found", {}).get(tgt)
+            e = {"name": d["name"]} if d else None
+        if self.kvm_link and self.kvm_link.monitors:
+            w, h = self.kvm_link.remote_size()
+        else:
+            w, h = (e or {}).get("kvm_w", 1920), (e or {}).get("kvm_h", 1080)
+        name = (self.kvm_link.name if self.kvm_link else (e or {}).get("name")) or "Komputer obok"
+        return name, w, h, bool(self.kvm_link and self.kvm_link.connected)
+
+    def _kvm_toggle(self):
+        if not self.kvm_var.get():
+            self._kvm_stop()
+            self._kvm_status("Wyłączona.", self.T.TEXT_2)
+            return
+        e = self._kvm_entry()
+        if not e:
+            self.kvm_var.set(False)
+            self.toast("Wybierz komputer obok (musi mieć włączony „Zdalny dostęp”).", "warn")
+            return
+        import pd_kvm
+        k = self._kvm_cfg()
+        try:
+            import pynput  # noqa
+        except Exception as ex:
+            self.kvm_var.set(False)
+            self.toast(f"Przechwytywanie myszy niedostępne: {ex}", "error")
+            return
+        self.kvm_link = pd_kvm.KvmLink(self, e, lambda st, txt: self.post("kvm", (st, txt)),
+                                       clip_enabled=lambda: bool(self._kvm_cfg().get("clip", True)))
+        self.kvm_link.monitor = int(k.get("monitor", 1))
+        self.kvm_switch = pd_kvm.EdgeSwitch(self.kvm_link, dict(k), lambda st: self.post("kvm", (st, "")))
+        try:
+            self.kvm_switch.start()
+        except Exception as ex:
+            self._kvm_stop()
+            self.kvm_var.set(False)
+            self.toast(f"Nie można przechwytywać myszy: {ex}", "error")
+            return
+        self.kvm_link.start()
+        self.nav["kvm"].set_badge(dot=self.T.AMBER)
+        self._update_tray()
+
+    def _kvm_stop(self):
+        if self.kvm_switch:
+            self.kvm_switch.stop()
+            self.kvm_switch = None
+        if self.kvm_link:
+            self.kvm_link.stop()
+            self.kvm_link = None
+        if hasattr(self, "nav"):
+            self.nav["kvm"].set_badge("")
+            if hasattr(self, "kvm_canvas"):
+                self.kvm_canvas.draw()
+        self._update_tray()
+
+    def _kvm_status(self, text, color):
+        self.kvm_status.configure(text=text, text_color=color)
+
+    def _kvm_event(self, st, txt):
+        T = self.T
+        if not self.kvm_link and st not in ("local",):
+            return
+        side = {"right": "prawą", "left": "lewą", "top": "górną", "bottom": "dolną"}[self._kvm_cfg()["side"]]
+        if st == "connected":
+            self._kvm_status(f"● {txt}. Przesuń kursor za {side} krawędź ekranu.", T.GREEN)
+            self.nav["kvm"].set_badge(dot=T.GREEN)
+            self.kvm_canvas.draw()
+        elif st in ("connecting", "waiting"):
+            self._kvm_status(txt, T.AMBER)
+            self.nav["kvm"].set_badge(dot=T.AMBER)
+            self.kvm_canvas.draw()
+        elif st == "error":
+            self._kvm_status(txt, T.RED)
+            self.kvm_var.set(False)
+            self._kvm_stop()
+        elif st == "monitors":
+            n = len(self.kvm_link.monitors) if self.kvm_link else 1
+            self.kvm_mon_menu.configure(values=[f"Monitor {i}" for i in range(1, n + 1)])
+            save_config(self.cfg)
+            self.kvm_canvas.draw()
+        elif st == "remote":
+            name = self.kvm_link.name if self.kvm_link else ""
+            self._kvm_status(f"● Sterujesz komputerem {name}. Powrót: przez krawędź albo Ctrl+Alt+Esc.", T.GREEN)
+        elif st == "local" and self.kvm_link and self.kvm_link.connected:
+            self._kvm_status(f"● Połączono z {self.kvm_link.name}. Przesuń kursor za {side} krawędź ekranu.", T.GREEN)
+        elif st == "notice" and txt:
+            self.toast(txt, "ok")
+
+    def _clear_trusted(self):
+        if self.hcfg.get("trusted") and self.U.confirm(self.root, "Wyczyścić zapamiętane komputery?",
+                                                         "Następnym razem będą znów prosić o akceptację.", "Wyczyść",
+                                                         danger=True, icon="shield"):
+            self.hcfg["trusted"] = []
+            self._save_host()
+            self._refresh_host()
+
     # ================================================================ strona: Dostęp
     def _build_access_page(self):
         ctk, T, U = self.ctk, self.T, self.U
@@ -513,6 +812,8 @@ class App:
                               "Ktoś może poprosić o dostęp – połączy się dopiero, gdy klikniesz „Akceptuj”.")
         self.a_ask_var = ctk.BooleanVar(value=bool(self.hcfg.get("ask_enabled", True)))
         U.switch(r.right, "", self.a_ask_var, command=self._toggle_ask).pack()
+        self.r_trust = self._setting_row(c, "Zapamiętane komputery", "…")
+        U.secondary_button(self.r_trust.right, "Wyczyść", self._clear_trusted, width=120).pack()
         self.r_svc = self._setting_row(c, "Usługa systemowa",
                                        "Dostęp do ekranu logowania, okien UAC i Ctrl+Alt+Del – także po restarcie, "
                                        "zanim ktoś się zaloguje. Wymaga uprawnień administratora.")
@@ -740,8 +1041,8 @@ class App:
         elif kind == "chat":
             self._host_chat(*data)
         elif kind == "ask":
-            client, peer, code, answer = data
-            self.U.AskDialog(self.root, client, peer, code, answer)
+            client, peer, code, answer, can_remember = data
+            self.U.AskDialog(self.root, client, peer, code, answer, can_remember=can_remember)
         elif kind == "connected":
             self._on_connected(*data)
         elif kind == "conn_error":
@@ -750,6 +1051,22 @@ class App:
         elif kind == "conn_code":
             self.conn_status.configure(text=f"Czekam na akceptację na komputerze zdalnym.   Kod: {data[:3]} {data[3:]}",
                                        text_color=self.T.TEXT_2)
+        elif kind == "kvm":
+            self._kvm_event(*data)
+        elif kind == "kvm_toggle":
+            self.kvm_var.set(not bool(self.kvm_link))
+            self._kvm_toggle()
+        elif kind == "nearby":
+            self.nearby_scanning = False
+            self.nearby_found = data
+            for hid, d in data.items():  # zapamiętaj adres (szybsze łączenie, także gdy rozgłoszenia nie działają)
+                e = self._book_entry(hid)
+                if e and e.get("ip") != d["ip"]:
+                    e["ip"] = d["ip"]
+                    save_config(self.cfg)
+            self._fill_nearby()
+            if hasattr(self, "kvm_menu") and not self.kvm_link:
+                self._kvm_refresh_menu()
         elif kind == "update":
             self._on_update_info(*data)
         elif kind == "toast":
@@ -768,14 +1085,14 @@ class App:
         self.toast("Skopiowano ID.", "ok")
 
     # ================================================================ udostępnianie
-    def ask_sync(self, client, peer, code):
+    def ask_sync(self, client, peer, code, dev=None):
         ev = threading.Event()
-        res = [False]
+        res = [(False, False)]
 
-        def answer(ok):
-            res[0] = bool(ok)
+        def answer(ok, remember=False):
+            res[0] = (bool(ok), bool(remember))
             ev.set()
-        self.post("ask", (client, peer, code, answer))
+        self.post("ask", (client, peer, code, answer, bool(dev)))
         ev.wait(60)
         return res[0]
 
@@ -786,12 +1103,12 @@ class App:
         if self.service:
             from pd_service import ServiceHostProxy
             self.host = ServiceHostProxy(log, lambda s, t: self.post("chat", (s, t)), lambda: self.post("sessions"),
-                                         lambda: self.post("status"), lambda c, p, code, a: self.post("ask", (c, p, code, a)))
+                                         lambda: self.post("status"), lambda c, p, code, a, dev: self.post("ask", (c, p, code, a, dev)))
             return
         from pd_host import HostService
         self.host = HostService(self.hcfg, log=lambda m: log(time.strftime("%H:%M:%S  ") + m),
                                 on_chat=lambda s, t: self.post("chat", (s, t)), on_sessions=lambda: self.post("sessions"),
-                                on_status=lambda: self.post("status"), ask=self.ask_sync)
+                                on_status=lambda: self.post("status"), ask=self.ask_sync, save_cfg=self._save_host)
         try:
             self.host.start()
         except Exception as e:
@@ -867,6 +1184,9 @@ class App:
         self.r_pw.desc.configure(text="Ustawione." if pw else "Brak – połączenia tylko z akceptacją (jeśli włączone).")
         self.a_ask_var.set(bool(self.hcfg.get("ask_enabled", True)))
         self.svc_btn.configure(text="Odinstaluj" if self.service else "Zainstaluj")
+        n = len(self.hcfg.get("trusted", []))
+        self.r_trust.desc.configure(text=(f"{n} – łączą się bez pytania o akceptację." if n else
+                                          "Brak. Zaznacz „Zapamiętaj ten komputer” przy akceptowaniu połączenia."))
         sessions = list(self.host.sessions) if on else []
         self.m_sess.value.configure(text=str(len(sessions)))
         self.m_sess.sub.configure(text="połączonych teraz" if sessions else "nikt nie jest połączony")
@@ -935,18 +1255,33 @@ class App:
         self.show_page("connect")
         self._set_target(e["addr"])
         self.pw.delete(0, "end")
-        if e.get("key"):
-            self.connect()
-        else:
-            self.conn_status.configure(text="Wpisz hasło (albo zostaw puste, aby poprosić o akceptację) i kliknij „Połącz”.",
-                                       text_color=self.T.TEXT_2)
-            self.pw.focus_set()
+        self.connect()  # z zapamiętanym hasłem – od razu; bez hasła – prośba „Akceptuj” na drugim komputerze
 
     def _set_connecting(self, on):
         self.connecting = on
         self.connect_btn.configure(state="disabled" if on else "normal", text="Łączenie…" if on else "Połącz")
 
-    def open_connection(self, target, password="", mode=None, saved=None, on_code=None):
+    def _connect_by_id(self, host_id):
+        """ID -> połączenie: najpierw szukamy w sieci lokalnej i Tailscale, potem przez serwer pośredniczący."""
+        import pd_discovery
+        e = self._book_entry(host_id) or {}
+        found = pd_discovery.discover(want_id=host_id, timeout=1.5, extra=[e.get("ip")],
+                                      exclude_id=self.hcfg.get("host_id")).get(host_id)
+        if found:
+            try:
+                sock = open_tcp(found["ip"], found["port"], timeout=6)
+                if e:
+                    e["ip"] = found["ip"]
+                return sock
+            except OSError:
+                pass
+        relay = self.hcfg.get("relay", "")
+        if relay:
+            return relay_connect_viewer(relay, self.hcfg.get("relay_key", ""), host_id)
+        raise ConnectionError(f"Nie znaleziono komputera {format_id(host_id)}. Sprawdź, czy jest włączony i ma "
+                              "włączony „Zdalny dostęp”, oraz czy oba komputery są w tej samej sieci albo w Tailscale.")
+
+    def open_connection(self, target, password="", mode=None, saved=None, on_code=None, extra=None):
         """Nawiązuje połączenie (blokuje – wołać z wątku). Zwraca (kanał, hello, ok, klucz_hasła)."""
         from pd_viewer import viewer_caps
         saved = saved or {}
@@ -954,10 +1289,7 @@ class App:
             mode = "password" if (password or saved.get("key")) else "ask"
         kind = parse_target(target)
         if kind[0] == "id":
-            relay = self.hcfg.get("relay", "")
-            if not relay:
-                raise ConnectionError("Aby łączyć się po ID, ustaw serwer pośredniczący w Ustawieniach (albo wpisz adres IP).")
-            sock = relay_connect_viewer(relay, self.hcfg.get("relay_key", ""), kind[1])
+            sock = self._connect_by_id(kind[1])
         else:
             sock = open_tcp(kind[1], kind[2])
         try:
@@ -970,8 +1302,12 @@ class App:
                     raise AuthError("Komputer zdalny zmienił hasło – wpisz je ponownie.")
                 return derive_password_key(password, salt)
 
-            ch, hello, ok, pw_key = viewer_handshake(sock, key_provider, {"client": f"{username()}@{hostname()}",
-                                                                          "caps": viewer_caps()}, mode=mode, on_code=on_code)
+            had_key = bool(self.cfg.get("device_key"))
+            dk = device_key(self.cfg)
+            if not had_key:
+                save_config(self.cfg)
+            info = {"client": f"{username()}@{hostname()}", "caps": viewer_caps(), **(extra or {})}
+            ch, hello, ok, pw_key = viewer_handshake(sock, key_provider, info, mode=mode, on_code=on_code, dev_key=dk)
             sock.settimeout(60)
             return ch, hello, ok, pw_key
         except Exception:
@@ -1119,6 +1455,9 @@ class App:
                     pystray.MenuItem(lambda _i: f"ID: {format_id(self.hcfg['host_id'])}", None, enabled=False),
                     pystray.MenuItem(lambda _i: "Dostęp: włączony" if self.host else "Dostęp: wyłączony", None, enabled=False),
                     pystray.Menu.SEPARATOR,
+                    pystray.MenuItem("Wspólna mysz i klawiatura", lambda: self.post("kvm_toggle"),
+                                     checked=lambda _i: bool(self.kvm_link)),
+                    pystray.Menu.SEPARATOR,
                     pystray.MenuItem("Zakończ", lambda: self.post("quit")),
                 ))
             self.tray.run_detached()
@@ -1157,6 +1496,7 @@ class App:
         self.quit()
 
     def quit(self):
+        self._kvm_stop()
         if self.host:
             self.host.stop()
         if self.sessions_win:

@@ -23,12 +23,13 @@ import threading
 import time
 
 from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 APP_NAME = "PilotDesk"
-VERSION = "3.0"
+VERSION = "3.1"
 DEFAULT_UPDATE_SOURCE = "karoljurmanowicz/pilotdesk"  # GitHub: właściciel/repozytorium (zakładka Releases)
 PROTO = 2
 DEFAULT_PORT = 47800        # połączenia bezpośrednie (LAN / VPN / przekierowanie portu)
@@ -365,6 +366,23 @@ class SecureChannel:
 ZERO_KEY = bytes(32)
 
 
+def device_key(cfg):
+    """Stały klucz tego komputera (Ed25519) – pozwala „zapamiętać” go na innych komputerach."""
+    from cryptography.hazmat.primitives.serialization import NoEncryption, PrivateFormat
+    if not cfg.get("device_key"):
+        k = Ed25519PrivateKey.generate()
+        cfg["device_key"] = b64e(k.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption()))
+    return Ed25519PrivateKey.from_private_bytes(b64d(cfg["device_key"]))
+
+
+def device_pub(cfg):
+    return b64e(device_key(cfg).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
+
+
+def _transcript(hn, vn, hpub, vpub):
+    return b"pilotdesk-device-v1" + hn + vn + hpub + vpub
+
+
 def _pub_bytes(priv):
     return priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
 
@@ -376,7 +394,7 @@ def _derive(shared, pw_key, hn, vn, hpub, vpub):
 
 
 def host_handshake(sock, cfg, info, ask_cb=None):
-    """Zwraca (kanał, dane klienta, tryb). ask_cb(klient, kod) -> True/False dla trybu bez hasła."""
+    """Zwraca (kanał, dane klienta, tryb). ask_cb(klient, kod, klucz_urządzenia|None) -> True/False (tryb bez hasła)."""
     has_pw = has_password(cfg)
     salt = b64d(cfg["pw_salt"]) if has_pw else secrets.token_bytes(16)
     pw_key = b64d(cfg["pw_key"]) if has_pw else secrets.token_bytes(32)
@@ -405,19 +423,27 @@ def host_handshake(sock, cfg, info, ask_cb=None):
         raise AuthError("Błędne hasło")
     if auth.get("t") != "auth" or auth.get("magic") != AUTH_MAGIC:
         raise AuthError("Błędne hasło")
+    dev = None
+    try:
+        if auth.get("device_pub") and auth.get("device_sig"):
+            Ed25519PublicKey.from_public_bytes(b64d(auth["device_pub"])).verify(
+                b64d(auth["device_sig"]), _transcript(hn, vn, hpub, vpub))
+            dev = auth["device_pub"]
+    except Exception:
+        dev = None
     if mode == "ask":
         if not ask_ok:
             ch.send_json({"t": "auth_denied", "reason": "Ten komputer przyjmuje tylko połączenia z hasłem."})
             raise PermissionError("tryb bez hasła wyłączony")
         ch.send_json({"t": "waiting", "code": code})
-        if not ask_cb(str(auth.get("client", "?"))[:80], code):
+        if not ask_cb(str(auth.get("client", "?"))[:80], code, dev):
             ch.send_json({"t": "auth_denied", "reason": "Połączenie zostało odrzucone na zdalnym komputerze."})
             raise PermissionError("odrzucono")
     ch.send_json({"t": "auth_ok", "mode": mode, **info})
     return ch, auth, mode
 
 
-def viewer_handshake(sock, key_provider, client_info, mode="password", on_code=None):
+def viewer_handshake(sock, key_provider, client_info, mode="password", on_code=None, dev_key=None):
     """key_provider(salt) -> klucz hasła; w trybie 'ask' nie jest wołany. on_code(kod) – kod weryfikacyjny."""
     hello = recv_plain(sock)
     if hello.get("app") != APP_NAME:
@@ -435,7 +461,11 @@ def viewer_handshake(sock, key_provider, client_info, mode="password", on_code=N
     shared = priv.exchange(X25519PublicKey.from_public_bytes(hpub))
     h2v, v2h, code = _derive(shared, pw_key, hn, vn, hpub, vpub)
     ch = SecureChannel(sock, send_key=v2h, recv_key=h2v)
-    ch.send_json({"t": "auth", "magic": AUTH_MAGIC, "mode": mode, **client_info})
+    auth = {"t": "auth", "magic": AUTH_MAGIC, "mode": mode, **client_info}
+    if dev_key is not None:
+        auth["device_pub"] = b64e(dev_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
+        auth["device_sig"] = b64e(dev_key.sign(_transcript(hn, vn, hpub, vpub)))
+    ch.send_json(auth)
     while True:
         try:
             _t, body = ch.recv()

@@ -1,4 +1,4 @@
-# PilotDesk 3.0
+# PilotDesk 3.1
 
 Zdalny pulpit do Twoich komputerów: bez limitów, bez konta, z szyfrowaniem end-to-end.
 Program to jeden plik **PilotDesk.exe**, który przy pierwszym uruchomieniu sam się instaluje.
@@ -31,10 +31,38 @@ Program to jeden plik **PilotDesk.exe**, który przy pierwszym uruchomieniu sam 
 | **Zdalny restart** | „⋯” → Uruchom ponownie; PilotDesk sam połączy się ponownie, gdy komputer wróci |
 | **Automatyczne ponowne łączenie** | po zerwaniu połączenia (do 90 s) i po restarcie (do 10 min) |
 | **Wake-on-LAN** | Komputery → „⋯” → Obudź; sygnał idzie też przez inne połączone komputery |
-| **Bez hasła** | komputer zdalny pokazuje **Akceptuj / Odrzuć** z 6-cyfrowym kodem do porównania |
+| **Bez hasła** | komputer zdalny pokazuje **Akceptuj / Odrzuć** z 6-cyfrowym kodem; „Zapamiętaj ten komputer” = następnym razem bez pytania |
+| **Wspólna mysz i klawiatura** | kursor przechodzi na komputer obok przez krawędź ekranu, wizualny układ ekranów, wł./wył. |
+| **Łączenie po ID bez serwera** | komputery same znajdują się w sieci lokalnej i Tailscale |
 | **Usługa systemowa** | dostęp do ekranu logowania, okien UAC i Ctrl+Alt+Del, także po restarcie |
 | **Aktualizacje** | automatyczne, z GitHub Releases albo z Twojego pliku JSON |
 | **Bezpieczeństwo** | X25519 + AES-256-GCM (nowe klucze w każdej sesji), hasło nigdy nie idzie przez sieć, blokada po błędnych próbach |
+
+## Łączenie z drugim komputerem (najprościej)
+
+1. Na drugim komputerze włącz **Zdalny dostęp**.
+2. Na tym komputerze w zakładce **Połącz** pojawi się on na liście **„W Twojej sieci”**. Kliknij **Połącz**.
+   Możesz też wpisać jego ID.
+3. Na drugim komputerze kliknij **Akceptuj**. Zaznacz **„Zapamiętaj ten komputer”**, a następnym razem
+   połączy się bez pytania.
+
+Wyszukiwanie po ID działa bez żadnego serwera: w sieci lokalnej i w Tailscale (jeśli go masz).
+Listę zapamiętanych komputerów wyczyścisz w zakładce **Dostęp**.
+
+## Wspólna mysz i klawiatura (komputer obok)
+
+Zakładka **Mysz i klawiatura**:
+1. Wybierz **Komputer obok** i włącz przełącznik. Możesz to zrobić także z ikony przy zegarze.
+2. W polu **Układ ekranów** przeciągnij ekran drugiego komputera tam, gdzie naprawdę stoi (po prawej,
+   po lewej, nad albo pod). Zielona linia pokazuje krawędź, przez którą przechodzi kursor.
+3. Przesuń kursor za tę krawędź: mysz i klawiatura sterują teraz drugim komputerem.
+4. **Ctrl+C / Ctrl+V** działa między komputerami dla tekstu i plików.
+
+**Powrót:** przesuń kursor z powrotem przez krawędź albo naciśnij **Ctrl+Alt+Esc**. Wyłącz przełącznik,
+gdy nie potrzebujesz tej funkcji (po starcie programu jest zawsze wyłączona).
+
+W opcjach wybierzesz też „Przejście przez krawędź: od razu / po chwili” (chroni przed przypadkowym
+przeskokiem) oraz monitor drugiego komputera.
 
 ## Łączenie przez internet
 
@@ -80,7 +108,8 @@ sesja, i sprawdza sumę kontrolną SHA-256. Zamiast GitHuba możesz podać adres
 * Tryb prywatności wymaga Windows 10 2004 lub nowszego. Lokalną mysz i klawiaturę blokuje tylko w trybie
   usługi, bo wtedy ma uprawnienia administratora.
 * Schowek przesyła pliki od razu po skopiowaniu (do 4 GB). Większe przesyłaj menedżerem plików.
-* Wszystkie komputery muszą mieć PilotDesk 3.x (protokół się zmienił).
+* Wszystkie komputery muszą mieć PilotDesk 3.x.
+* Wspólna mysz: w Windows nie da się przejąć ekranu Ctrl+Alt+Del i okien UAC drugiego komputera bez usługi systemowej.
 
 ## Pliki projektu
 
@@ -97,4 +126,6 @@ sesja, i sprawdza sumę kontrolną SHA-256. Zamiast GitHuba możesz podać adres
 | `pd_common.py` | protokół i szyfrowanie |
 | `pd_ui.py`, `pd_theme.py` | wygląd, logo, ikony |
 | `pd_relay.py` | serwer pośredniczący |
+| `pd_kvm.py` | wspólna mysz i klawiatura |
+| `pd_discovery.py` | wyszukiwanie komputerów po ID |
 | `fonts/` | czcionka Geist (licencja SIL Open Font License) |

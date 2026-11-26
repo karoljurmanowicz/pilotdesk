@@ -300,7 +300,7 @@ class ControlServer:
                 elif op == "answer":
                     a = self.asks.get(m.get("rid"))
                     if a:
-                        a[1] = bool(m.get("ok"))
+                        a[1] = (bool(m.get("ok")), bool(m.get("remember")))
                         a[0].set()
         except Exception:
             pass
@@ -338,15 +338,15 @@ class ControlServer:
     def chat(self, sess, text):
         self.emit({"ev": "chat", "sid": sess.id, "client": sess.client, "text": text})
 
-    def ask(self, client, peer, code):
+    def ask(self, client, peer, code, dev=None):
         rid = secrets.token_hex(6)
         ev = threading.Event()
-        self.asks[rid] = [ev, False]
-        if not self.emit({"ev": "ask", "rid": rid, "client": client, "peer": peer, "code": code}):
+        self.asks[rid] = [ev, (False, False)]
+        if not self.emit({"ev": "ask", "rid": rid, "client": client, "peer": peer, "code": code, "device": bool(dev)}):
             self.asks.pop(rid, None)
             return False  # nikt nie jest zalogowany przy komputerze – odrzucamy
         ev.wait(60)
-        return self.asks.pop(rid, [None, False])[1]
+        return self.asks.pop(rid, [None, (False, False)])[1]
 
 
 def run_agent():
@@ -355,7 +355,7 @@ def run_agent():
     cfg = load_config(path)
     ctl = ControlServer(cfg.get("control_token", ""))
     svc = HostService(cfg, log=ctl.log, on_chat=ctl.chat, on_sessions=ctl.sessions_changed, on_status=ctl.status,
-                      ask=ctl.ask, agent_mode=True)
+                      ask=ctl.ask, agent_mode=True, save_cfg=lambda: save_config(cfg, path))
     ctl.svc = svc
     ctl.start()
     mtime = 0
@@ -475,6 +475,6 @@ class ServiceHostProxy:
             if s:
                 self.on_chat(s, m.get("text", ""))
         elif ev == "ask":
-            def answer(ok, rid=m.get("rid")):
-                self.send({"op": "answer", "rid": rid, "ok": bool(ok)})
-            self.on_ask(m.get("client", "?"), m.get("peer", ""), m.get("code", ""), answer)
+            def answer(ok, remember=False, rid=m.get("rid")):
+                self.send({"op": "answer", "rid": rid, "ok": bool(ok), "remember": bool(remember)})
+            self.on_ask(m.get("client", "?"), m.get("peer", ""), m.get("code", ""), answer, bool(m.get("device")))

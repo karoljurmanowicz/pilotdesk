@@ -371,7 +371,7 @@ def info(master, title, text, icon="info"):
 class AskDialog(ctk.CTkToplevel):
     """Prośba o połączenie bez hasła: Akceptuj / Odrzuć, z kodem weryfikacyjnym i odliczaniem."""
 
-    def __init__(self, master, client, peer, code, on_answer, timeout=55):
+    def __init__(self, master, client, peer, code, on_answer, timeout=55, can_remember=False):
         super().__init__(master)
         self.on_answer = on_answer
         self.done = False
@@ -395,8 +395,11 @@ class AskDialog(ctk.CTkToplevel):
         label(f, f"{code[:3]} {code[3:]}", 30, mono=True).pack(anchor="w")
         label(f, "Porównaj z kodem na ekranie osoby, która się łączy. Akceptuj tylko, gdy wiesz, kto to jest.",
               12, color=T.TEXT_2, wraplength=360, justify="left").pack(anchor="w", pady=(4, 0))
+        self.remember = tk.BooleanVar(value=False)
+        if can_remember:
+            checkbox(f, "Zapamiętaj ten komputer – następnym razem bez pytania", self.remember).pack(anchor="w", pady=(14, 0))
         b = ctk.CTkFrame(f, fg_color="transparent")
-        b.pack(fill="x", pady=(20, 0))
+        b.pack(fill="x", pady=(18, 0))
         primary_button(b, "Akceptuj", lambda: self.answer(True), width=120).pack(side="right")
         self.rej = secondary_button(b, f"Odrzuć ({self.left})", lambda: self.answer(False), width=120)
         self.rej.pack(side="right", padx=8)
@@ -423,6 +426,6 @@ class AskDialog(ctk.CTkToplevel):
             return
         self.done = True
         try:
-            self.on_answer(ok)
+            self.on_answer(ok, bool(ok and self.remember.get()))
         finally:
             self.destroy()
