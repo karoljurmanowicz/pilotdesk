@@ -177,6 +177,11 @@ class App:
         self._refresh_host()
         self._setup_tray()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
+        import pd_log
+        pd_log.setup()
+        pd_log.UiWatchdog(root)
+        root.report_callback_exception = lambda *a: pd_log.error(
+            "Błąd w oknie: %s", "".join(__import__("traceback").format_exception(*a)))
         root.after(100, self._poll)
         root.after(15000, self._auto_update_tick)
         root.after(1200, self._nearby_tick)
@@ -900,6 +905,9 @@ class App:
         if INST.running_installed():
             r = self._setting_row(c, "Odinstaluj PilotDesk", "Usuwa program, skróty, autostart i usługę.")
             U.danger_button(r.right, "Odinstaluj", self._uninstall, width=110).pack()
+        r = self._setting_row(c, "Dziennik zdarzeń", "Gdy coś nie działa, wyślij ten plik – widać w nim przyczynę "
+                                                      "(także zawieszeń okna).")
+        U.secondary_button(r.right, "Otwórz", self._open_log, width=100).pack()
         r = self._setting_row(c, "Pliki ustawień", config_path() + ("\n" + self.hpath if self.hpath else ""))
 
         bar = ctk.CTkFrame(p, fg_color="transparent")
@@ -940,6 +948,21 @@ class App:
             self.start_host()
         self._refresh_host()
         self.toast("Zapisano.", "ok")
+
+    def _open_log(self):
+        import pd_log
+        path = pd_log.log_path()
+        try:
+            if sys.platform == "win32":
+                os.startfile(os.path.dirname(path))
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        except Exception:
+            pass
+        self.root.clipboard_clear()
+        self.root.clipboard_append(path)
+        self.toast(f"Dziennik: {path} (ścieżka skopiowana)", "info", 6000)
 
     def _make_shortcut(self):
         try:
@@ -1031,6 +1054,8 @@ class App:
 
     def _handle_event(self, kind, data):
         if kind == "log":
+            import pd_log
+            pd_log.info("%s", data)
             self.log_box.configure(state="normal")
             self.log_box.insert("end", data + "\n")
             if int(self.log_box.index("end").split(".")[0]) > 500:
@@ -1047,6 +1072,8 @@ class App:
         elif kind == "connected":
             self._on_connected(*data)
         elif kind == "conn_error":
+            import pd_log
+            pd_log.info("Nieudane połączenie: %s", data)
             self._set_connecting(False)
             self.conn_status.configure(text=data, text_color=self.T.RED)
         elif kind == "conn_code":

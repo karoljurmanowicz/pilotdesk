@@ -1,6 +1,7 @@
 """PilotDesk – strona udostępniająca (komputer, którym się steruje)."""
 import io
 import json
+import queue
 import os
 import platform
 import shutil
@@ -375,6 +376,9 @@ class HostSession:
         self.blocked = False
         self.clip = None
         self.video_on = auth.get("video", True) is not False
+        self.outq = queue.Queue(maxsize=2000)
+        self._uipi_check = 0.0
+        self._uipi_told = 0.0
 
     # ---------------------------------------------------------------- pętla główna
     def stop(self):
@@ -384,10 +388,23 @@ class HostSession:
         self.ch.close()
 
     def send_json(self, obj):
+        """Nie blokuje: wiadomości idą przez osobny wątek, więc obsługa myszy/klawiatury nigdy nie czeka na sieć."""
         try:
-            self.ch.send_json(obj)
-        except Exception:
-            self.stop()
+            self.outq.put_nowait(obj)
+        except queue.Full:
+            pass
+
+    def _sender(self):
+        while self.running:
+            try:
+                obj = self.outq.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                self.ch.send_json(obj)
+            except Exception:
+                self.stop()
+                return
 
     def send_chat(self, text):
         self.send_json({"t": "chat", "text": text})
@@ -410,7 +427,7 @@ class HostSession:
             self.clip.start()
         except Exception as e:
             self.svc.log(f"Schowek niedostępny: {e}")
-        for target in (self._screen_loop, self._pinger):
+        for target in (self._screen_loop, self._pinger, self._sender):
             threading.Thread(target=target, daemon=True).start()
         try:
             while self.running:
@@ -807,7 +824,30 @@ class HostSession:
         except Exception as e:
             self.svc.log(f"Błąd obsługi '{t}': {e}")
 
+    def _check_uipi(self):
+        """Windows nie pozwala zwykłemu programowi sterować oknem uruchomionym jako administrator (UIPI).
+        Wykrywamy to i mówimy wprost, co zrobić."""
+        now = time.time()
+        if sys.platform != "win32" or self.svc.agent_mode or now - self._uipi_check < 2:
+            return
+        self._uipi_check = now
+        try:
+            if W.is_admin():
+                return
+            title, elevated = W.foreground_info()
+        except Exception:
+            return
+        if elevated and now - self._uipi_told > 60:
+            self._uipi_told = now
+            self.svc.log(f"Okno „{title}” działa jako administrator – Windows blokuje jego sterowanie")
+            self.send_json({"t": "notice", "kind": "warn", "text":
+                            f"Okno „{title[:40]}” na komputerze zdalnym działa jako administrator, więc Windows "
+                            "blokuje jego sterowanie. Rozwiązanie: na tamtym komputerze PilotDesk → Dostęp → "
+                            "Usługa systemowa → Zainstaluj."})
+
     def _handle_input(self, t, m):
+        if t in ("mouse_btn", "key") and m.get("down"):
+            self._check_uipi()
         if t == "mouse_move":
             p = self._pos(m)
             if p:

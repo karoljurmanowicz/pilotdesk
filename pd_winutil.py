@@ -206,6 +206,45 @@ def sync_input_desktop():
     return False
 
 
+def foreground_info():
+    """(tytuł okna na pierwszym planie, czy jego proces działa jako administrator). Tylko Windows."""
+    if not IS_WIN:
+        return "", False
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    advapi32.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+                                             ctypes.POINTER(wintypes.DWORD)]
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return "", False
+    buf = ctypes.create_unicode_buffer(200)
+    user32.GetWindowTextW(hwnd, buf, 200)
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    h = kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return buf.value, False
+    try:
+        tok = wintypes.HANDLE()
+        if not advapi32.OpenProcessToken(h, 0x0008, ctypes.byref(tok)):  # TOKEN_QUERY
+            return buf.value, True  # brak dostępu do tokenu = proces o wyższych uprawnieniach
+        try:
+            elev = wintypes.DWORD()
+            ret = wintypes.DWORD()
+            ok = advapi32.GetTokenInformation(tok, 20, ctypes.byref(elev), 4, ctypes.byref(ret))  # TokenElevation
+            return buf.value, bool(ok and elev.value)
+        finally:
+            kernel32.CloseHandle(tok)
+    finally:
+        kernel32.CloseHandle(h)
+
+
 def reboot(delay=3):
     if IS_WIN:
         subprocess.Popen(["shutdown", "/r", "/t", str(delay), "/c", "PilotDesk: zdalny restart"],

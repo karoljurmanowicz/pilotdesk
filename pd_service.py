@@ -322,6 +322,11 @@ class ControlServer:
 
     # --- wywołania z HostService
     def log(self, text):
+        try:
+            import pd_log
+            pd_log.info("[agent] %s", text)
+        except Exception:
+            pass
         line = time.strftime("%H:%M:%S  ") + text
         self.logs = (self.logs + [line])[-200:]
         self.emit({"ev": "log", "text": line})

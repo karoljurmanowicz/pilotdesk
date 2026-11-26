@@ -29,7 +29,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 APP_NAME = "PilotDesk"
-VERSION = "3.4"
+VERSION = "3.5"
 DEFAULT_UPDATE_SOURCE = "karoljurmanowicz/pilotdesk"  # GitHub: właściciel/repozytorium (zakładka Releases)
 PROTO = 2
 DEFAULT_PORT = 47800        # połączenia bezpośrednie (LAN / VPN / przekierowanie portu)
@@ -189,22 +189,47 @@ def send_wol(mac, broadcast="255.255.255.255"):
         s.close()
 
 
-def get_local_ips():
-    ips = []
+_ips_cache = {"ips": None, "t": 0.0, "busy": False}
+
+
+def _primary_ip():
+    """Adres głównej karty sieciowej – bez zapytań DNS (natychmiast)."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("10.255.255.255", 1))
-        ips.append(s.getsockname()[0])
+        ip = s.getsockname()[0]
         s.close()
+        return ip
     except Exception:
-        pass
+        return None
+
+
+def _refresh_ips():
+    ips = []
+    p = _primary_ip()
+    if p:
+        ips.append(p)
     try:
-        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
+        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:  # bywa wolne przy zepsutym DNS
             if ip not in ips and not ip.startswith("127."):
                 ips.append(ip)
     except Exception:
         pass
-    return ips or ["127.0.0.1"]
+    _ips_cache.update(ips=ips or ["127.0.0.1"], t=time.time(), busy=False)
+
+
+def get_local_ips():
+    """Adresy IP tego komputera. Nigdy nie blokuje: wolniejsze ustalanie odbywa się w tle, a do tego czasu
+    zwracamy adres głównej karty sieciowej."""
+    c = _ips_cache
+    if c["ips"] is None or time.time() - c["t"] > 60:
+        if not c["busy"]:
+            c["busy"] = True
+            threading.Thread(target=_refresh_ips, name="local-ips", daemon=True).start()
+        if c["ips"] is None:
+            p = _primary_ip()
+            return [p] if p else ["127.0.0.1"]
+    return list(c["ips"])
 
 
 # --------------------------------------------------------------------------- gniazda

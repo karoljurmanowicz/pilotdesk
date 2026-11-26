@@ -195,6 +195,8 @@ class KvmLink:
                     elif mt == "clip_files_end":
                         if self.clip:
                             self.clip.remote_files_end(m)
+                    elif mt == "notice":
+                        self.on_state("notice", m.get("text", ""))
                     elif mt == "chat":
                         self.on_state("notice", f"Wiadomość od {self.name}: {m.get('text', '')}")
         except Exception:

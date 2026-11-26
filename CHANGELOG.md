@@ -1,5 +1,12 @@
 # Co nowego w PilotDesk
 
+## 3.5
+- Naprawione: sterowanie myszą i klawiaturą mogło przestać działać, gdy przesyłanie obrazu się zatykało – obsługa myszy nie czeka już na sieć.
+- Naprawione: „Rozłącz” działa od razu, nawet gdy połączenie jest zablokowane.
+- Naprawione: okno mogło się zawieszać na komputerach z problematycznym DNS (np. druga karta sieciowa do drukarki).
+- Gdy okno na komputerze zdalnym działa jako administrator (np. oprogramowanie drukarki), PilotDesk mówi wprost, że Windows blokuje jego sterowanie, i podpowiada rozwiązanie (usługa systemowa).
+- Dziennik zdarzeń z wykrywaniem zawieszeń: Ustawienia → Dziennik zdarzeń → Otwórz.
+
 ## 3.4
 - Naprawione sprawdzanie i pobieranie aktualizacji na komputerach, na których program błędnie zgłaszał brak internetu (np. z drugą kartą sieciową do drukarki): systemowa weryfikacja certyfikatów Windows, zapasowy DNS i obsługa proxy.
 - Komunikat podaje prawdziwą przyczynę błędu, a przycisk „Diagnostyka” w zakładce Aktualizacje sprawdza DNS, proxy i certyfikat.

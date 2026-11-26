@@ -512,6 +512,8 @@ class SessionView(ctk.CTkFrame):
     def _connection_lost(self, gen, reason):
         if gen != self.gen or not self.alive or self.reconnecting:
             return
+        import pd_log
+        pd_log.info("Utracono połączenie z %s: %s", self.remote_name, reason)
         self.reconnecting = True
         self.tab_dot.configure(image=T.icon("dot", 11, T.AMBER))
         if self.player:
@@ -553,8 +555,9 @@ class SessionView(ctk.CTkFrame):
             return
         try:
             self._tick_inner()
-        except Exception as e:
-            print("PilotDesk: błąd UI:", e, file=sys.stderr)
+        except Exception:
+            import pd_log
+            pd_log.exception("Błąd w oknie sesji")
         if self.alive:
             self.after(10, self._tick)
 
@@ -698,6 +701,8 @@ class SessionView(ctk.CTkFrame):
             elif self.privacy_on:
                 self.toast("Tryb prywatności włączony" + ("" if m.get("blocked") else
                                                           " (lokalna mysz i klawiatura nie są zablokowane)"), "ok")
+        elif t == "notice":
+            self.toast(m.get("text", ""), m.get("kind", "info"), 12000)
         elif t == "rebooting":
             self.reboot_pending = True
             self.toast("Komputer zdalny się restartuje – połączę się ponownie automatycznie.", "info", 6000)
@@ -941,29 +946,41 @@ class SessionView(ctk.CTkFrame):
 
     # ---------------------------------------------------------------- zamykanie
     def close(self):
-        if self.alive and self.ch:
-            for p in self.pressed.values():
-                if "text" not in p:
-                    try:
-                        self.ch.send_json({"t": "key", "down": False, "k": p})
-                    except Exception:
-                        break
+        """Rozłącz – natychmiast. Pożegnalne komunikaty (puszczenie klawiszy, wyłączenie prywatności) wysyłamy
+        w tle z krótkim limitem czasu, żeby zablokowane połączenie nie zawieszało okna."""
+        ch = self.ch
+        bye = []
+        if self.alive and ch:
+            bye = [{"t": "key", "down": False, "k": p} for p in self.pressed.values() if "text" not in p]
             if self.privacy_on:
-                try:
-                    self.ch.send_json({"t": "privacy", "on": False})
-                except Exception:
-                    pass
+                bye.append({"t": "privacy", "on": False})
         self.pressed.clear()
         self.alive = False
         self.gen += 1
+        try:
+            import pd_log
+            pd_log.info("Rozłączono sesję z %s", self.remote_name)
+        except Exception:
+            pass
         for x in (self.player, self.clip):
             if x:
                 x.stop()
-        try:
-            if self.ch:
-                self.ch.close()
-        except Exception:
-            pass
+
+        def goodbye():
+            try:
+                if bye:
+                    ch.sock.settimeout(2)
+                    for m in bye:
+                        ch.send_json(m)
+            except Exception:
+                pass
+            finally:
+                try:
+                    ch.close()
+                except Exception:
+                    pass
+        if ch:
+            threading.Thread(target=goodbye, name="disconnect", daemon=True).start()
         for w in (self.fm, self.chat):
             try:
                 if w:
