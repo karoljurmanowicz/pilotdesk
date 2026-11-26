@@ -21,3 +21,9 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
         run: python scripts/ci_service_test.py
+      - name: Test trybu aplikacji (Akceptuj/Odrzuć)
+        if: always()
+        timeout-minutes: 8
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python scripts/ci_app_test.py

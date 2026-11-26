@@ -44,7 +44,7 @@ def main():
         "--hidden-import", "win32timezone", "--hidden-import", "servicemanager",
         "--hidden-import", "win32serviceutil", "--hidden-import", "win32ts", "--hidden-import", "win32profile",
         "--exclude-module", "matplotlib", "--exclude-module", "scipy", "--exclude-module", "pandas",
-        "--hidden-import", "pilotdesk",
+        "--hidden-import", "pilotdesk", "--hidden-import", "pd_diag",
         os.path.join(HERE, "launcher.py"),
     ]
     print(" ".join(args))

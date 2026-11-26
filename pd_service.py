@@ -179,6 +179,34 @@ def service_self_update():
     return 0
 
 
+_update_lock = threading.Lock()
+
+
+def service_update_check(force=False):
+    """Pobiera nową wersję i podmienia program usługi (proces `--service-update`). Działa w usłudze i w agencie
+    (oba jako SYSTEM). force – na prośbę okna, nawet gdy automatyczne aktualizacje są wyłączone."""
+    if not _update_lock.acquire(blocking=False):
+        return False
+    try:
+        import pd_update
+        cfg = load_config(machine_config_path())
+        src = update_source(cfg) or update_source({})
+        if not src or not (force or cfg.get("auto_update", True)):
+            return False
+        info = pd_update.check(src)
+        if not info or not pd_update.newer(info["version"], VERSION):
+            return False
+        _log(f"Aktualizacja usługi {VERSION} → {info['version']}")
+        new = pd_update.download(info, os.path.join(program_dir(), "PilotDesk.new.exe"))
+        subprocess.Popen([new, "--service-update"], creationflags=NO_WINDOW | DETACHED | BREAKAWAY, close_fds=True)
+        return True
+    except Exception as e:
+        _log(f"Aktualizacja usługi nieudana: {e!r}")
+        raise
+    finally:
+        _update_lock.release()
+
+
 # --------------------------------------------------------------------------- usługa
 
 def run_service_dispatcher():
@@ -259,7 +287,7 @@ def run_service_dispatcher():
             import win32ts
             _log(f"Usługa {VERSION} uruchomiona ({sys.executable})")
             threading.Thread(target=self._ensure_firewall, daemon=True).start()
-            last_upd = time.time() - 6 * 3600 + 300  # pierwsze sprawdzenie aktualizacji po 5 min
+            last_upd = time.time() - 3 * 3600 + 120  # pierwsze sprawdzenie aktualizacji po 2 min, potem co 3 h
             while win32event.WaitForSingleObject(self.stop_evt, 2000) != win32event.WAIT_OBJECT_0:
                 sid = win32ts.WTSGetActiveConsoleSessionId()
                 if sid != 0xFFFFFFFF and (sid != self.sid or not self._alive()) and time.time() - self.last_spawn > 3:
@@ -271,22 +299,13 @@ def run_service_dispatcher():
                     except Exception as e:
                         _log(f"Nie można uruchomić agenta w sesji {sid}: {e!r}")
                         servicemanager.LogErrorMsg(f"PilotDesk: nie można uruchomić agenta: {e}")
-                if time.time() - last_upd > 6 * 3600:
+                if time.time() - last_upd > 3 * 3600:
                     last_upd = time.time()
                     threading.Thread(target=self._check_update, daemon=True).start()
 
         def _check_update(self):
             try:
-                import pd_update
-                cfg = load_config(machine_config_path())
-                if not cfg.get("auto_update", True) or not update_source(cfg):
-                    return
-                info = pd_update.check(update_source(cfg))
-                if not info or not pd_update.newer(info["version"], VERSION):
-                    return
-                new = pd_update.download(info, os.path.join(program_dir(), "PilotDesk.new.exe"))
-                subprocess.Popen([new, "--service-update"], creationflags=NO_WINDOW | DETACHED | BREAKAWAY,
-                                 close_fds=True)
+                service_update_check()
             except Exception as e:
                 servicemanager.LogErrorMsg(f"PilotDesk: aktualizacja nieudana: {e}")
 
@@ -296,6 +315,13 @@ def run_service_dispatcher():
 
 
 # --------------------------------------------------------------------------- agent (w sesji użytkownika)
+
+def _safe(fn, *a):
+    try:
+        return fn(*a)
+    except Exception:
+        return None
+
 
 class ControlServer:
     """Kanał agent <-> okno programu użytkownika (127.0.0.1, z tokenem)."""
@@ -346,6 +372,8 @@ class ControlServer:
                             s.stop()
                 elif op == "chat" and m.get("sid") in sess:
                     sess[m["sid"]].send_chat(m.get("text", ""))
+                elif op == "update":
+                    threading.Thread(target=lambda: _safe(service_update_check, True), daemon=True).start()
                 elif op == "answer":
                     a = self.asks.get(m.get("rid"))
                     if a:
@@ -382,7 +410,8 @@ class ControlServer:
 
     def status(self):
         if self.svc:
-            self.emit({"ev": "status", "direct": self.svc.direct_status, "relay": self.svc.relay_status})
+            self.emit({"ev": "status", "direct": self.svc.direct_status, "relay": self.svc.relay_status,
+                       "version": VERSION})
 
     def sessions_changed(self):
         if self.svc:
@@ -427,6 +456,10 @@ def run_agent():
             cfg.update(new)
             ctl.token = cfg.get("control_token", ctl.token)
             svc.stop(kick=False)
+            if not cfg.get("host_id"):  # brak konfiguracji usługi (np. usunięta) – nie udostępniamy z pustą
+                ctl.log("Brak konfiguracji usługi – udostępnianie wstrzymane")
+                time.sleep(2)
+                continue
             try:
                 svc.start()
                 ctl.log("Agent usługi uruchomiony – dostęp także do ekranu logowania i okien UAC")
@@ -470,6 +503,10 @@ class ServiceHostProxy:
         self.f = None
         self.wlock = threading.Lock()
         self.caps = {}
+        self.started = time.time()
+        self.agent_version = None
+        self._update_asked = False
+        self.connected = False  # czy agent usługi odpowiada (okno pokazuje prawdziwy stan, nie „Gotowy” na ślepo)
         threading.Thread(target=self._loop, daemon=True).start()
 
     def start(self):
@@ -508,6 +545,7 @@ class ServiceHostProxy:
             except Exception:
                 pass
             self.f = None
+            self.connected = False
             if self.sessions:
                 self.sessions = set()
                 self.on_sessions()
@@ -517,12 +555,25 @@ class ServiceHostProxy:
 
     def _event(self, m):
         ev = m.get("ev")
+        self.connected = True
         if ev == "sessions":
             self.sessions = {_SessionProxy(self, d) for d in m.get("list", [])}
             self.on_sessions()
         elif ev == "status":
             self.direct_status = "usługa • " + m.get("direct", "")
             self.relay_status = m.get("relay", "")
+            self.agent_version = m.get("version", "?")
+            if not self._update_asked:
+                try:
+                    import pd_update
+                    older = m.get("version") is None or pd_update.newer(VERSION, m["version"])
+                except Exception:
+                    older = False
+                if older:
+                    self._update_asked = True
+                    self.log(time.strftime("%H:%M:%S  ") + f"Usługa ma starszą wersję ({self.agent_version}) – "
+                             f"aktualizuję ją do {VERSION}")
+                    self.send({"op": "update"})
             self.on_status()
         elif ev == "log":
             self.log(m.get("text", ""))

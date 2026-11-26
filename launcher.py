@@ -46,7 +46,7 @@ def selftest(out):
     """Ładuje wszystkie moduły i sprawdza najważniejsze możliwości. Zapisuje raport JSON."""
     report = {"ok": True, "modules": {}, "python": sys.version}
     mods = ["pd_common", "pd_install", "pd_theme", "pd_ui", "pd_host", "pd_viewer", "pd_media", "pd_clipfiles",
-            "pd_winutil", "pd_update", "pd_service", "pd_kvm", "pd_discovery", "pd_net", "pd_log", "truststore", "certifi", "customtkinter", "mss", "numpy", "PIL.ImageTk", "pynput",
+            "pd_winutil", "pd_update", "pd_service", "pd_kvm", "pd_discovery", "pd_net", "pd_log", "pd_diag", "truststore", "certifi", "customtkinter", "mss", "numpy", "PIL.ImageTk", "pynput",
             "pyperclip", "cryptography", "av"]
     if sys.platform == "win32":
         mods += ["pystray", "soundcard", "win32serviceutil", "servicemanager", "win32ts", "win32profile",

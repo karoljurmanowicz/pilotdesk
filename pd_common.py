@@ -78,8 +78,23 @@ def machine_config_path():
     return os.path.join(machine_dir(), "host.json")
 
 
+def service_registered():
+    """Czy usługa PilotDesk jest zarejestrowana w Windows (szybko – rejestr, bez uruchamiania sc.exe)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                       r"SYSTEM\CurrentControlSet\Services\PilotDeskService"))
+        return True
+    except OSError:
+        return False
+
+
 def service_mode():
-    return sys.platform == "win32" and os.path.exists(machine_config_path())
+    """Tryb usługi = jest konfiguracja usługi I usługa jest zainstalowana. Sam plik po nieudanej instalacji
+    lub niepełnym odinstalowaniu nie może przełączać programu w tryb, w którym nikt nie przyjmuje połączeń."""
+    return sys.platform == "win32" and os.path.exists(machine_config_path()) and service_registered()
 
 
 def host_config_path():

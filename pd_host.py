@@ -522,6 +522,10 @@ class HostSession:
             with self.cond:
                 while self.running and self.inflight >= 2:
                     self.cond.wait(0.5)
+                    if time.time() - t0 > 5:  # zgubione potwierdzenie nie może zamrozić obrazu na zawsze
+                        self.inflight = 0
+                        self.force_full = True
+                        break
             if not self.running:
                 break
             try:

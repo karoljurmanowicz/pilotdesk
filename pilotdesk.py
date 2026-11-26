@@ -126,7 +126,7 @@ class NavItem:
 
 
 class App:
-    def __init__(self, root, cfg, ext_queue=None, minimized=False):
+    def __init__(self, root, cfg, ext_queue=None, minimized=False, instance=None):
         import customtkinter as ctk
         import pd_theme as T
         import pd_ui as U
@@ -134,6 +134,7 @@ class App:
         self.root = root
         self.cfg = cfg
         self.ext_queue = ext_queue
+        self.instance = instance
         self.host = None
         self.events = queue.Queue()
         self.host_chats = {}
@@ -334,6 +335,8 @@ class App:
         U.checkbox(bot, "Zapamiętaj hasło", self.remember).pack(side="left")
         self.connect_btn = U.primary_button(bot, "Połącz", self.connect, width=112)
         self.connect_btn.pack(side="right")
+        self.check_btn = U.secondary_button(bot, "Sprawdź połączenie", self.check_connection, width=150)
+        self.check_btn.pack(side="right", padx=(0, 8))
         self.conn_status = U.label(inner, "", 12, color=T.TEXT_2, wraplength=460, justify="left")
         self.conn_status.pack(anchor="w", pady=(10, 0))
 
@@ -799,12 +802,17 @@ class App:
             rule += (f' & netsh advfirewall firewall delete rule name="{pd_service.FW_RULE}" & '
                      f'netsh advfirewall firewall add rule name="{pd_service.FW_RULE}" dir=in action=allow '
                      f'program="{pd_service.program_exe()}" enable=yes profile=any')
-        try:
-            code = W.run_elevated("cmd.exe", f"/c {rule}", wait=True)
-            self.toast("Zapora ustawiona – PilotDesk może przyjmować połączenia." if code == 0 else
-                       f"Zapora: polecenie zakończyło się kodem {code}.", "ok" if code == 0 else "warn", 5000)
-        except OSError as e:
-            self.toast(str(e), "error")
+        self.toast("Potwierdź zmianę w okienku Windows…", "info", 4000)
+
+        def work():  # czekanie na okno UAC nie może blokować okna programu
+            try:
+                code = W.run_elevated("cmd.exe", f"/c {rule}", wait=True)
+                self.post("toast", ("Zapora ustawiona – PilotDesk może przyjmować połączenia." if code == 0 else
+                                    f"Zapora: polecenie zakończyło się kodem {code}.", "ok" if code == 0 else "warn",
+                                    5000))
+            except OSError as e:
+                self.post("toast", (str(e), "error"))
+        threading.Thread(target=work, name="firewall", daemon=True).start()
 
     def _clear_trusted(self):
         if self.hcfg.get("trusted") and self.U.confirm(self.root, "Wyczyścić zapamiętane komputery?",
@@ -912,7 +920,9 @@ class App:
             U.danger_button(r.right, "Odinstaluj", self._uninstall, width=110).pack()
         r = self._setting_row(c, "Dziennik zdarzeń", "Gdy coś nie działa, wyślij ten plik – widać w nim przyczynę "
                                                       "(także zawieszeń okna).")
-        U.secondary_button(r.right, "Otwórz", self._open_log, width=100).pack()
+        U.secondary_button(r.right, "Otwórz", self._open_log, width=100).pack(side="right")
+        self.report_btn = U.secondary_button(r.right, "Zapisz raport", self.save_report, width=120)
+        self.report_btn.pack(side="right", padx=(0, 8))
         r = self._setting_row(c, "Pliki ustawień", config_path() + ("\n" + self.hpath if self.hpath else ""))
 
         bar = ctk.CTkFrame(p, fg_color="transparent")
@@ -969,6 +979,63 @@ class App:
         self.root.clipboard_append(path)
         self.toast(f"Dziennik: {path} (ścieżka skopiowana)", "info", 6000)
 
+    def save_report(self):
+        """Jeden plik do wysłania: dzienniki programu i usługi + opis systemu (bez haseł)."""
+        self.report_btn.configure(state="disabled", text="Zapisuję…")
+
+        def work():
+            try:
+                import pd_diag
+                path = pd_diag.make_report(self.cfg, self.hcfg, self.host)
+                self.post("call", lambda: self._report_done(path, None))
+            except Exception as e:
+                self.post("call", lambda err=e: self._report_done(None, err))
+        threading.Thread(target=work, name="report", daemon=True).start()
+
+    def _report_done(self, path, err):
+        self.report_btn.configure(state="normal", text="Zapisz raport")
+        if err:
+            self.toast(f"Nie udało się zapisać raportu: {err}", "error", 6000)
+            return
+        if sys.platform == "win32":
+            try:
+                import subprocess
+                subprocess.Popen(["explorer", "/select,", path])
+            except Exception:
+                pass
+        self.U.info(self.root, "Raport zapisany", f"Plik:\n{path}\n\nWyślij go osobie, która pomaga Ci z "
+                                                  "PilotDesk. Nie zawiera haseł.", icon="check")
+
+    def check_connection(self):
+        target = self.target.get().strip()
+        if not target:
+            self.conn_status.configure(text="Wpisz ID lub adres komputera, który chcesz sprawdzić.",
+                                       text_color=self.T.AMBER)
+            return
+        self.check_btn.configure(state="disabled", text="Sprawdzam…")
+        e = self._book_entry(target) or {}
+        extra = [e.get("ip")] + [x.get("ip") for x in self.cfg.get("book", [])]
+
+        def work():
+            import pd_diag
+            try:
+                lines = pd_diag.check_target(target, extra_ips=extra, my_id=self.hcfg.get("host_id"),
+                                             relay=self.hcfg.get("relay", ""))
+                text = pd_diag.format_lines(lines)
+            except Exception as ex:
+                text = f"Błąd sprawdzania: {ex}"
+            import pd_log
+            pd_log.info("Sprawdzenie połączenia z %s:\n%s", target, text)
+            self.post("call", lambda: self._check_done(target, text))
+        threading.Thread(target=work, name="check", daemon=True).start()
+
+    def _check_done(self, target, text):
+        self.check_btn.configure(state="normal", text="Sprawdź połączenie")
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.U.info(self.root, f"Sprawdzenie połączenia: {target}", text + "\n\n(Wynik skopiowano do schowka.)",
+                    icon="globe")
+
     def _make_shortcut(self):
         try:
             INST.create_desktop_shortcut()
@@ -981,7 +1048,7 @@ class App:
                            "Odinstaluj", danger=True, icon="trash", check="Usuń też ustawienia i zapisane komputery")
         if r:
             if self.service:
-                self._run_service_admin("--uninstall-service")
+                self._run_service_admin("--uninstall-service")  # program i tak się zamyka
             if self.host:
                 self.host.stop()
             INST.uninstall(remove_settings=r[1])
@@ -989,19 +1056,22 @@ class App:
 
     # ================================================================ usługa systemowa
     def _run_service_admin(self, arg):
+        """Wywoływać z wątku w tle (czeka na okno UAC i na usługę). Zwraca (kod, błąd)."""
         import pd_winutil as W
-        if not (INST.is_windows() and INST.is_frozen()):
-            self.toast("Usługa systemowa jest dostępna w wersji PilotDesk.exe dla Windows.", "warn")
-            return None
         try:
             extra = f' "{config_path()}"' if arg == "--install-service" else ""
-            return W.run_elevated(sys.executable, arg + extra, wait=True)
+            return W.run_elevated(sys.executable, arg + extra, wait=True), ""
         except OSError as e:
-            self.toast(str(e), "error")
-            return None
+            return None, str(e)
 
     def _toggle_service(self):
-        if not self.service:
+        if getattr(self, "_svc_busy", False):
+            return
+        if not (INST.is_windows() and INST.is_frozen()):
+            self.toast("Usługa systemowa jest dostępna w wersji PilotDesk.exe dla Windows.", "warn")
+            return
+        installing = not self.service
+        if installing:
             if not (has_password(self.hcfg) or self.hcfg.get("ask_enabled", True)):
                 self.toast("Najpierw ustaw hasło.", "warn")
                 return
@@ -1009,12 +1079,6 @@ class App:
                                   "PilotDesk będzie działał jako usługa Windows: dostęp do ekranu logowania i okien UAC, "
                                   "także po restarcie. Windows poprosi o zgodę administratora.", "Zainstaluj", icon="shield"):
                 return
-            if self.host:
-                self.host.stop()
-                self.host = None
-            code = self._run_service_admin("--install-service")
-            if code == 0:
-                self.toast("Usługa zainstalowana.", "ok")
         else:
             if not self.U.confirm(self.root, "Odinstalować usługę?", "Wrócisz do zwykłego trybu (dostęp tylko po zalogowaniu).",
                                   "Odinstaluj", danger=True, icon="shield"):
@@ -1025,14 +1089,33 @@ class App:
                     self.cfg[k] = self.hcfg[k]
             self.cfg["host_enabled"] = True
             save_config(self.cfg)
-            if self.host:
-                self.host.stop()
-                self.host = None
-            code = self._run_service_admin("--uninstall-service")
-            if code == 0:
-                self.toast("Usługa usunięta.", "ok")
+        if self.host:
+            self.host.stop()
+            self.host = None
+        self._svc_busy = True
+        self.svc_btn.configure(state="disabled", text="Czekaj…")
+        self.toast("Potwierdź zmianę w okienku Windows i poczekaj chwilę…", "info", 6000)
+        arg = "--install-service" if installing else "--uninstall-service"
+
+        def work():  # instalacja trwa (kopiowanie, start usługi) – nie w wątku okna
+            code, err = self._run_service_admin(arg)
+            self.post("call", lambda: self._service_done(installing, code, err))
+        threading.Thread(target=work, name="service-admin", daemon=True).start()
+
+    def _service_done(self, installing, code, err):
+        self._svc_busy = False
+        self.svc_btn.configure(state="normal")
+        if err:
+            self.toast(err, "error", 6000)
+        elif code == 0:
+            self.toast("Usługa zainstalowana." if installing else "Usługa usunięta.", "ok")
+        elif code is not None:
+            self.toast(f"Nie udało się ({code}). Szczegóły: Ustawienia → Dziennik zdarzeń.", "error", 6000)
+        import pd_log
+        pd_log.info("Usługa: %s → kod %s %s", "instalacja" if installing else "odinstalowanie", code, err)
         self._load_host_cfg()
-        self.start_host() if (self.service or self.hcfg.get("host_enabled")) else None
+        if self.service or self.hcfg.get("host_enabled"):
+            self.start_host()
         self._refresh_host()
 
     # ================================================================ zdarzenia z wątków
@@ -1040,13 +1123,16 @@ class App:
         self.events.put((kind, data))
 
     def _poll(self):
+        if self.instance:
+            self.instance.heartbeat = time.time()  # „okno żyje” – dla drugiego uruchomienia programu
         try:
             while True:
                 kind, data = self.events.get_nowait()
                 try:
                     self._handle_event(kind, data)
-                except Exception as e:
-                    print("PilotDesk:", kind, e, file=sys.stderr)
+                except Exception:
+                    import pd_log
+                    pd_log.exception(f"Błąd obsługi zdarzenia okna '{kind}'")
         except queue.Empty:
             pass
         if self.ext_queue:
@@ -1073,14 +1159,17 @@ class App:
             self._host_chat(*data)
         elif kind == "ask":
             client, peer, code, answer, can_remember = data
-            self.U.AskDialog(self.root, client, peer, code, answer, can_remember=can_remember)
+            d = self.U.AskDialog(self.root, client, peer, code, answer, can_remember=can_remember)
+            if os.environ.get("PILOTDESK_TEST_AUTOACCEPT"):  # tylko automatyczne testy na Windows (CI)
+                self.root.after(1500, lambda: d.answer(True))
         elif kind == "connected":
             self._on_connected(*data)
         elif kind == "conn_error":
             import pd_log
             pd_log.info("Nieudane połączenie: %s", data)
             self._set_connecting(False)
-            self.conn_status.configure(text=data, text_color=self.T.RED)
+            self.conn_status.configure(text=data + "\nKliknij „Sprawdź połączenie”, aby zobaczyć, na którym etapie "
+                                                    "jest problem.", text_color=self.T.RED)
         elif kind == "conn_code":
             self.conn_status.configure(text=f"Czekam na akceptację na komputerze zdalnym.   Kod: {data[:3]} {data[3:]}",
                                        text_color=self.T.TEXT_2)
@@ -1120,6 +1209,8 @@ class App:
             self.show_window()
         elif kind == "quit":
             self.quit()
+        elif kind == "call":
+            data()
 
     def toast(self, text, kind="info", ms=3500):
         self.U.Toast(self.root, text, kind, ms)
@@ -1215,14 +1306,20 @@ class App:
         for v in (self.c_share_var, self.a_share_var):
             v.set(on)
         pw = has_password(self.hcfg)
-        if on:
+        svc_down = (on and self.service and not getattr(self.host, "connected", True)
+                    and time.time() - getattr(self.host, "started", 0) > 8)
+        if svc_down:
+            state, color = ("Usługa systemowa nie odpowiada – połączenia nie są przyjmowane. Dostęp → Usługa "
+                            "systemowa: Odinstaluj i Zainstaluj ponownie.", T.AMBER)
+        elif on:
             mode = "usługa" if self.service else "aplikacja"
             state, color = f"Gotowy · {'hasło ustawione' if pw else 'tylko z akceptacją'} · {mode}", T.GREEN
         elif not pw and not self.hcfg.get("ask_enabled", True):
             state, color = "Ustaw hasło, aby włączyć dostęp", T.AMBER
         else:
             state, color = "Wyłączony", T.TEXT_3
-        self.c_state.configure(text=("●  " + state), text_color=color if on else T.TEXT_2)
+        self.c_state.configure(text=("●  " + state), text_color=color if on else T.TEXT_2, wraplength=300,
+                               justify="left")
         self.me_dot.configure(image=T.icon("dot", 11, color if on else T.TEXT_3))
         self.me_sub.configure(text=f"ID {format_id(self.hcfg['host_id'])}")
         self.nav["access"].set_badge(dot=T.GREEN if on else T.TEXT_3)
@@ -1849,10 +1946,27 @@ def run_gui(cfg, minimized):
     ext = queue.Queue()
     si = INST.SingleInstance(ext.put)
     if not si.acquire():
-        INST.send_to_instance("show")
-        return
+        r = INST.send_to_instance("show")
+        if r is not None and r.startswith("ok"):
+            return  # działająca kopia pokazała swoje okno
+        # poprzednia kopia się zawiesiła (albo nie odpowiada) – zamykamy ją i startujemy od nowa
+        import pd_log
+        pd_log.setup()
+        pd_log.info("Poprzednia kopia PilotDesk nie odpowiada (%r) – zamykam ją", r)
+        pid = None
+        try:
+            pid = int(r.split()[1])
+        except Exception:
+            pass
+        INST.kill_instance(pid)
+        for _ in range(10):
+            if si.acquire():
+                break
+            time.sleep(0.5)
+        else:
+            return
     root = ctk.CTk()
-    App(root, cfg, ext_queue=ext, minimized=minimized)
+    App(root, cfg, ext_queue=ext, minimized=minimized, instance=si)
     root.mainloop()
 
 

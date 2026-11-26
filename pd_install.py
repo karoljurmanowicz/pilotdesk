@@ -198,8 +198,8 @@ def install(desktop=True, start_menu=True, autostart=True, version="", log=lambd
     dst_dir = install_dir()
     dst = installed_exe()
     os.makedirs(dst_dir, exist_ok=True)
-    # zamknij działającą starą wersję
-    send_to_instance("quit")
+    # zamknij działającą starą wersję (także zawieszoną – inaczej nie da się podmienić pliku)
+    close_running_instance()
     for _ in range(20):
         try:
             if os.path.exists(dst):
@@ -238,7 +238,7 @@ def install(desktop=True, start_menu=True, autostart=True, version="", log=lambd
 
 def uninstall(remove_settings=False):
     import winreg
-    send_to_instance("quit")
+    close_running_instance()
     for folder in ("Desktop", "Programs"):
         p = os.path.join(special_folder(folder), f"{APP}.lnk")
         if os.path.exists(p):
@@ -270,28 +270,91 @@ def launch_detached(cmd):
 
 # --------------------------------------------------------------------------- jedna instancja
 
-def send_to_instance(cmd):
+def send_to_instance(cmd, timeout=2.0):
+    """Wysyła polecenie do działającej kopii programu. Zwraca odpowiedź („ok <pid>” / „hung <pid>”), ""
+    gdy kopia działa, ale nie odpowiedziała, albo None, gdy żadna kopia nie działa."""
     try:
         with socket.create_connection(("127.0.0.1", INSTANCE_PORT), timeout=1) as s:
             s.sendall(cmd.encode() + b"\n")
-            if cmd == "quit":
-                time.sleep(1.2)
-            return True
+            s.settimeout(timeout)
+            try:
+                reply = s.recv(64).decode(errors="ignore").strip()
+            except OSError:
+                reply = ""
+            return reply
     except OSError:
+        return None
+
+
+def _instance_pid():
+    """PID procesu, który trzyma port jednej instancji (gdy nie odpowiada)."""
+    if not is_windows():
+        return None
+    try:
+        out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True, timeout=10,
+                             creationflags=CREATE_NO_WINDOW).stdout
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 5 and parts[1] == f"127.0.0.1:{INSTANCE_PORT}" and parts[3] == "LISTENING":
+                return int(parts[4])
+    except Exception:
+        pass
+    return None
+
+
+def kill_instance(pid=None):
+    """Zamyka siłą zawieszoną kopię programu (nigdy siebie)."""
+    pid = pid or _instance_pid()
+    if not pid or pid == os.getpid():
         return False
+    try:
+        if is_windows():
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=15,
+                           creationflags=CREATE_NO_WINDOW)
+        else:
+            os.kill(pid, 9)
+    except Exception:
+        return False
+    for _ in range(30):
+        if send_to_instance("ping", timeout=0.5) is None:
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def close_running_instance(wait=8.0):
+    """Prosi działającą kopię o zamknięcie; gdy się nie zamknie (zawieszona) – zamyka ją siłą."""
+    r = send_to_instance("quit")
+    if r is None:
+        return True
+    end = time.time() + wait
+    while time.time() < end:
+        time.sleep(0.3)
+        if send_to_instance("ping", timeout=0.5) is None:
+            return True
+    pid = None
+    try:
+        pid = int(r.split()[1])
+    except Exception:
+        pass
+    return kill_instance(pid)
 
 
 class SingleInstance:
-    """Nasłuch na localhost: drugie uruchomienie programu pokazuje okno pierwszego."""
+    """Nasłuch na localhost: drugie uruchomienie programu pokazuje okno pierwszego. Okno programu co sekundę
+    odświeża `heartbeat` – po nim drugie uruchomienie poznaje, że pierwsza kopia się zawiesiła."""
 
     def __init__(self, on_command):
         self.on_command = on_command
         self.sock = None
+        self.heartbeat = time.time()
 
     def acquire(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if is_windows() and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        elif not is_windows():
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", INSTANCE_PORT))
             s.listen(4)
@@ -299,8 +362,12 @@ class SingleInstance:
             s.close()
             return False
         self.sock = s
-        threading.Thread(target=self._loop, daemon=True).start()
+        self.heartbeat = time.time()
+        threading.Thread(target=self._loop, name="single-instance", daemon=True).start()
         return True
+
+    def responsive(self):
+        return time.time() - self.heartbeat < 8
 
     def _loop(self):
         while True:
@@ -311,8 +378,10 @@ class SingleInstance:
             try:
                 c.settimeout(2)
                 data = c.recv(64).decode(errors="ignore").strip()
+                state = "ok" if self.responsive() else "hung"
                 if data in ("show", "quit"):
                     self.on_command(data)
+                c.sendall(f"{state} {os.getpid()}\n".encode())
             except OSError:
                 pass
             finally:
