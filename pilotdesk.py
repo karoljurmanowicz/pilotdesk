@@ -184,6 +184,7 @@ class App:
         root.report_callback_exception = lambda *a: pd_log.error(
             "Błąd w oknie: %s", "".join(__import__("traceback").format_exception(*a)))
         root.after(100, self._poll)
+        root.after(1000, self._gc_tick)
         root.after(15000, self._auto_update_tick)
         root.after(1200, self._nearby_tick)
         if minimized:
@@ -1122,6 +1123,16 @@ class App:
     def post(self, kind, data=None):
         self.events.put((kind, data))
 
+    def _gc_tick(self):
+        """Sprzątanie pamięci w wątku okna (automatyczne jest wyłączone – patrz run_gui)."""
+        import gc
+        self._gc_n = getattr(self, "_gc_n", 0) + 1
+        try:
+            gc.collect(2 if self._gc_n % 15 == 0 else 1)
+        except Exception:
+            pass
+        self.root.after(1000, self._gc_tick)
+
     def _poll(self):
         if self.instance:
             self.instance.heartbeat = time.time()  # „okno żyje” – dla drugiego uruchomienia programu
@@ -1935,7 +1946,12 @@ def run_uninstall_gui():
 
 
 def run_gui(cfg, minimized):
+    import gc
     import customtkinter as ctk
+    # Sprzątanie pamięci TYLKO w wątku okna. Automatyczne sprzątanie potrafiło ruszyć w wątku pobocznym i usuwać tam
+    # czcionki/obrazki Tk – Tk czekał wtedy na wątek okna, a ten na wątek poboczny (Thread.start) => okno zawieszało
+    # się na zawsze (dziennik: „_scan_nearby … threading.start … tkinter/font.py __del__”).
+    gc.disable()
     init_ctk(cfg)
     if INST.should_offer_install() and not minimized:
         root = ctk.CTk()

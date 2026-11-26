@@ -8,6 +8,9 @@ import sys
 import threading
 import time
 
+# wyjście poleceń Windows (sc, netsh, netstat) jest w kodowaniu konsoli – polskie znaki psuły odczyt
+CON_ENC = "oem" if sys.platform == "win32" else None
+
 APP = "PilotDesk"
 INSTANCE_PORT = 47801
 CREATE_NO_WINDOW = 0x08000000
@@ -69,7 +72,7 @@ def _q(s):
 def _ps(script):
     """Uruchamia skrypt PowerShell bez okna konsoli."""
     return subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-                          capture_output=True, text=True, creationflags=CREATE_NO_WINDOW, timeout=60)
+                          capture_output=True, encoding=CON_ENC, errors="replace", creationflags=CREATE_NO_WINDOW, timeout=60)
 
 
 def _psq(s):
@@ -291,7 +294,7 @@ def _instance_pid():
     if not is_windows():
         return None
     try:
-        out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True, timeout=10,
+        out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, encoding=CON_ENC, errors="replace", timeout=10,
                              creationflags=CREATE_NO_WINDOW).stdout
         for line in out.splitlines():
             parts = line.split()

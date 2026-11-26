@@ -1,5 +1,11 @@
 # Co nowego w PilotDesk
 
+## 3.9
+- Naprawione: okno PilotDesk zawieszało się na stałe (najczęściej podczas wyszukiwania komputerów w sieci). Przyczyną było sprzątanie pamięci uruchamiane w wątku pobocznym – teraz odbywa się wyłącznie w wątku okna.
+- Naprawione: po ponownej instalacji lub aktualizacji usługi systemowej stary proces usługi działał dalej i odrzucał wszystkie połączenia („Połączenie zostało zamknięte”). Usługa zamyka teraz swoje stare procesy przy starcie, instalacji, aktualizacji i odinstalowaniu, a przestarzały proces sam się wyłącza.
+- Naprawione: zamykanie programu (i odinstalowanie usługi) zawieszało się w trybie usługi.
+- Naprawione: polskie znaki w komunikatach Windows psuły odczyt stanu usługi.
+
 ## 3.8
 - Naprawione: gdy PilotDesk się zawiesił, ponowne uruchomienie nic nie dawało (trzeba było odinstalować program). Teraz nowe uruchomienie wykrywa zawieszoną kopię, zamyka ją i startuje od nowa. Aktualizacja i odinstalowanie też radzą sobie z zawieszoną kopią.
 - Naprawione: okno zamierało na czas instalowania/odinstalowywania usługi systemowej i „Napraw zaporę” – teraz dzieje się to w tle.

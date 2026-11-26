@@ -25,6 +25,13 @@ def sh(cmd):
     return (r.stdout + r.stderr).strip()
 
 
+def agents():
+    """PID-y procesów „PilotDesk.exe --agent” (onefile: opakowanie + program = 2 procesy na agenta)."""
+    out = sh('powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -like '
+             "'PilotDesk*.exe' -and $_.CommandLine -like '*--agent*' } | ForEach-Object { $_.ProcessId }\"")
+    return [int(x) for x in out.split() if x.isdigit()]
+
+
 def section(title):
     print(f"\n===================== {title}", flush=True)
 
@@ -108,6 +115,28 @@ def main():
             results["discovery"] = f"błąd: {e}"
             print(results["discovery"])
 
+        section("ponowna instalacja – stary agent musi zniknąć")
+        print("agenci przed:", agents())
+        r = subprocess.run([EXE, "--install-service", cfgp], timeout=180)
+        print("kod:", r.returncode)
+        time.sleep(3)
+        t = None
+        for i in range(60):
+            try:
+                socket.create_connection(("127.0.0.1", 47800), timeout=1).close()
+                t = i
+                break
+            except OSError:
+                time.sleep(2)
+        time.sleep(3)
+        results["agents_after_reinstall"] = agents()
+        print("agenci po:", results["agents_after_reinstall"])
+        try:
+            results["session_after_reinstall"] = try_session("127.0.0.1", 47800)
+        except Exception as e:
+            results["session_after_reinstall"] = {"error": f"{type(e).__name__}: {e}"}
+        print(results["session_after_reinstall"])
+
     section("dzienniki usługi")
     pd = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
     for f in glob.glob(os.path.join(pd, "PilotDesk", "logs", "*")) + glob.glob(
@@ -125,11 +154,17 @@ def main():
     section("odinstalowanie")
     r = subprocess.run([EXE, "--uninstall-service"], timeout=120)
     print("kod:", r.returncode, "|", sh("sc query PilotDeskService"))
+    time.sleep(2)
+    results["agents_after_uninstall"] = agents()
+    print("agenci po odinstalowaniu:", results["agents_after_uninstall"])
 
     section("WYNIK")
     print(json.dumps(results, ensure_ascii=False, indent=1))
     s = results.get("session_127.0.0.1") or {}
-    ok = results.get("install_rc") == 0 and port_ok and s.get("auth") and s.get("frame")
+    s2 = results.get("session_after_reinstall") or {}
+    ok = (results.get("install_rc") == 0 and port_ok and s.get("auth") and s.get("frame") and s2.get("frame")
+          and len(results.get("agents_after_reinstall", [])) <= 2  # opakowanie onefile + właściwy agent
+          and not results.get("agents_after_uninstall"))
     print("OK" if ok else "BŁĄD")
     return 0 if ok else 1
 

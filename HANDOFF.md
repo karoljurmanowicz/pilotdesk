@@ -1,6 +1,6 @@
 # PilotDesk – przekazanie projektu (handoff)
 
-Stan na: 2026-11-26 · wersja **3.8** (wydawana przez CI) · repozytorium **github.com/karoljurmanowicz/pilotdesk** (publiczne)
+Stan na: 2026-11-26 · wersja **3.9** (wydawana przez CI) · repozytorium **github.com/karoljurmanowicz/pilotdesk** (publiczne)
 
 Ten plik jest dla osoby (lub kolejnej sesji Claude), która przejmuje prace. Najpierw przeczytaj
 **„Otwarte problemy”** – pierwszy z nich zgłosił użytkownik tuż przed przekazaniem.
@@ -92,6 +92,24 @@ zamknięte” = host zamknął gniazdo **przed wysłaniem hello**. Przyczyna nie
 - Ekran hosta: limit 5 s na potwierdzenia klatek (`inflight`).
 - Testy CI na Windows: `scripts/ci_service_test.py` (usługa) i `scripts/ci_app_test.py` (okno, tryb bez hasła;
   `PILOTDESK_TEST_AUTOACCEPT=1` klika „Akceptuj” automatycznie – zmienna tylko dla testów).
+
+### 3.1e [3.9] Diagnoza z dziennika PC 2 (pilotdesk.log przesłany przez użytkownika)
+- **Zawieszenia okna na stałe**: stos `_scan_nearby → Thread.start → wait` + wątek `work` w `tkinter/font.py __del__`
+  = zakleszczenie: cykliczny GC uruchomiony w wątku pobocznym niszczy obiekty Tk (CTkFont), Tk czeka na wątek
+  główny, a ten czeka w `Thread.start()`. Odtworzone testem. Naprawa: `gc.disable()` w `run_gui`
+  + `App._gc_tick` (gc.collect w wątku okna co 1 s, pełne co 15 s). Nie włączać GC z powrotem w procesie okna.
+- **„Połączenie zostało zamknięte”**: agent usługi logował „Error -3 while decompressing data” – osierocony
+  proces agenta (onefile = opakowanie + właściwy proces; usługa zabijała tylko opakowanie) działał z podmienionego
+  pliku exe i nie mógł doczytać modułów z PYZ. Naprawa: `kill_stray_agents()` (PowerShell CIM po linii poleceń
+  `--agent`) przy starcie usługi/instalacji/aktualizacji/odinstalowaniu, `_kill_tree` (taskkill /T), agent kończy
+  pracę, gdy exe się zmienił albo usługa zniknęła (`_agent_obsolete`). Test CI: ponowna instalacja → ≤ 2 procesy
+  agenta, po odinstalowaniu 0.
+- **Zamykanie okna wisiało** w `ServiceHostProxy.stop` (`makefile().close()` czeka na blokadę czytającego wątku);
+  to samo w `ControlServer` przy nowym kliencie. Naprawa: `_shutdown(sock)`.
+- **UnicodeDecodeError cp1250** przy `sc`/`netsh`/`netstat`: `encoding="oem", errors="replace"` (`CON_ENC`).
+- Potwierdzone UIPI: „Okno „PrintExp” działa jako administrator” – kliknięcia w programie drukarki wymagają usługi.
+- U użytkownika na PC 2 mogą wciąż działać stare osierocone agenty (3.6/3.7): po aktualizacji do 3.9 trzeba raz
+  „Dostęp → Usługa systemowa → Odinstaluj” (czyści agentów), potem ewentualnie „Zainstaluj”.
 
 ### 3.2 Łączenie przez internet (bez wspólnej sieci) – czeka na użytkownika
 Gotowe: `pd_relay.py` (serwer asyncio, bez zależności) + `scripts/install_relay.sh` (jedno polecenie:

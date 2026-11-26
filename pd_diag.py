@@ -9,6 +9,9 @@ import socket
 import subprocess
 import sys
 import time
+
+# wyjście poleceń Windows (sc, netsh, netstat) jest w kodowaniu konsoli – polskie znaki psuły odczyt
+CON_ENC = "oem" if sys.platform == "win32" else None
 import zipfile
 
 from pd_common import (APP_NAME, DEFAULT_PORT, PROTO, VERSION, format_id, get_local_ips, hostname, parse_target,
@@ -124,7 +127,7 @@ def _redact(obj):
 
 def _cmd(args, timeout=15):
     try:
-        r = subprocess.run(args, capture_output=True, text=True, errors="replace", timeout=timeout,
+        r = subprocess.run(args, capture_output=True, encoding=CON_ENC, errors="replace", timeout=timeout,
                            creationflags=NO_WINDOW)
         return (r.stdout + r.stderr).strip()
     except Exception as e:

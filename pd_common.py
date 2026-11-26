@@ -29,7 +29,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 APP_NAME = "PilotDesk"
-VERSION = "3.8"
+VERSION = "3.9"
 DEFAULT_UPDATE_SOURCE = "karoljurmanowicz/pilotdesk"  # GitHub: właściciel/repozytorium (zakładka Releases)
 PROTO = 2
 DEFAULT_PORT = 47800        # połączenia bezpośrednie (LAN / VPN / przekierowanie portu)

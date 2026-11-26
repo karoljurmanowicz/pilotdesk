@@ -20,6 +20,9 @@ import sys
 import threading
 import time
 
+# wyjście poleceń Windows (sc, netsh, netstat) jest w kodowaniu konsoli – polskie znaki psuły odczyt
+CON_ENC = "oem" if sys.platform == "win32" else None
+
 from pd_common import (VERSION, load_config, machine_config_path, machine_dir, save_config, update_source)
 
 SERVICE_NAME = "PilotDeskService"
@@ -51,7 +54,7 @@ def program_exe():
 
 
 def _sc(*args, check=False):
-    r = subprocess.run(["sc", *args], capture_output=True, text=True, creationflags=NO_WINDOW)
+    r = subprocess.run(["sc", *args], capture_output=True, encoding=CON_ENC, errors="replace", creationflags=NO_WINDOW)
     if check and r.returncode != 0:
         raise OSError((r.stdout + r.stderr).strip()[-300:])
     return r
@@ -68,7 +71,7 @@ def service_running():
 
 
 def _netsh(*args):
-    return subprocess.run(["netsh", "advfirewall", "firewall", *args], capture_output=True, text=True,
+    return subprocess.run(["netsh", "advfirewall", "firewall", *args], capture_output=True, encoding=CON_ENC, errors="replace",
                           creationflags=NO_WINDOW)
 
 
@@ -83,6 +86,38 @@ def set_firewall_rules(on=True):
     r2 = _netsh("add", "rule", f"name={FW_RULE}", "dir=in", "action=allow", "protocol=UDP", "localport=47802",
                 "enable=yes", "profile=any")
     return r1.returncode == 0 and r2.returncode == 0
+
+
+def kill_stray_agents(exclude_pid=None):
+    """Zamyka wszystkie procesy agenta (PilotDesk.exe --agent), także „osierocone”.
+
+    PilotDesk.exe (PyInstaller onefile) to dwa procesy: opakowanie i właściwy program. Usługa zamykała tylko
+    opakowanie, a właściwy agent działał dalej – ze starą wersją, trzymając porty 47800/47802/47803. Po podmianie
+    pliku programu taki agent nie mógł już doczytać swoich modułów („Error -3 while decompressing data”) i odrzucał
+    każde połączenie („Połączenie zostało zamknięte”)."""
+    if sys.platform != "win32":
+        return 0
+    ex = f" -and $_.ProcessId -ne {int(exclude_pid)}" if exclude_pid else ""
+    script = ("$n=0; Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'PilotDesk*.exe' -and "
+              f"$_.CommandLine -like '*--agent*'{ex} }} | ForEach-Object {{ "
+              "Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $n++ }; $n")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+                           capture_output=True, encoding=CON_ENC, errors="replace", timeout=60,
+                           creationflags=NO_WINDOW)
+        n = int((r.stdout or "0").strip().splitlines()[-1] or 0)
+    except Exception as e:
+        _log(f"Nie udało się zamknąć starych agentów: {e!r}")
+        return 0
+    if n:
+        _log(f"Zamknięto stare procesy agenta: {n}")
+    return n
+
+
+def _kill_tree(pid):
+    if not pid:
+        return
+    subprocess.run(["taskkill", "/F", "/T", "/PID", str(int(pid))], capture_output=True, creationflags=NO_WINDOW)
 
 
 def _wait_state(state, timeout=30):
@@ -103,6 +138,7 @@ def install_service(user_config_path):
     if service_installed():
         _sc("stop", SERVICE_NAME)
         _wait_state("STOPPED")
+    kill_stray_agents()  # inaczej stary agent działa dalej z podmienionego pliku
     os.makedirs(program_dir(), exist_ok=True)
     if os.path.abspath(src).lower() != program_exe().lower():
         for _ in range(20):
@@ -143,6 +179,7 @@ def uninstall_service():
     _sc("stop", SERVICE_NAME)
     _wait_state("STOPPED")
     _sc("delete", SERVICE_NAME)
+    kill_stray_agents()
     try:
         set_firewall_rules(False)
     except Exception:
@@ -166,6 +203,7 @@ def service_self_update():
     """Uruchamiane jako `PilotDesk.new.exe --service-update` przez usługę: podmienia program i restartuje usługę."""
     _sc("stop", SERVICE_NAME)
     _wait_state("STOPPED", 60)
+    kill_stray_agents()
     time.sleep(1)
     for _ in range(30):
         try:
@@ -224,6 +262,7 @@ def run_service_dispatcher():
             win32serviceutil.ServiceFramework.__init__(self, args)
             self.stop_evt = win32event.CreateEvent(None, 0, 0, None)
             self.proc = None
+            self.pid = None
             self.sid = None
             self.last_spawn = 0
 
@@ -249,11 +288,13 @@ def run_service_dispatcher():
         def _kill(self):
             import win32api
             if self.proc is not None:
+                _kill_tree(getattr(self, "pid", None))  # całe drzewo: opakowanie onefile + właściwy agent
                 try:
                     win32api.TerminateProcess(self.proc, 0)
                 except Exception:
                     pass
                 self.proc = None
+                self.pid = None
 
         def _spawn(self, sid):
             import win32api
@@ -269,10 +310,11 @@ def run_service_dispatcher():
             si.lpDesktop = "winsta0\\default"
             env = win32profile.CreateEnvironmentBlock(dup, False)
             cmd = f'"{sys.executable}" --agent'
-            hp, ht, _pid, _tid = win32process.CreateProcessAsUser(
+            hp, ht, pid, _tid = win32process.CreateProcessAsUser(
                 dup, None, cmd, None, None, False, NO_WINDOW | win32con.CREATE_UNICODE_ENVIRONMENT, env, None, si)
             ht.Close()
             self.proc = hp
+            self.pid = pid
             self.sid = sid
 
         def _ensure_firewall(self):
@@ -286,6 +328,7 @@ def run_service_dispatcher():
         def main(self):
             import win32ts
             _log(f"Usługa {VERSION} uruchomiona ({sys.executable})")
+            kill_stray_agents()  # agenci pozostali po poprzedniej wersji usługi
             threading.Thread(target=self._ensure_firewall, daemon=True).start()
             last_upd = time.time() - 3 * 3600 + 120  # pierwsze sprawdzenie aktualizacji po 2 min, potem co 3 h
             while win32event.WaitForSingleObject(self.stop_evt, 2000) != win32event.WAIT_OBJECT_0:
@@ -316,6 +359,19 @@ def run_service_dispatcher():
 
 # --------------------------------------------------------------------------- agent (w sesji użytkownika)
 
+def _shutdown(sock):
+    """Przerywa gniazdo, na którym inny wątek czeka w odczycie. Zamykanie obiektu makefile() w takiej sytuacji
+    blokowało się (czekało na blokadę trzymaną przez czytający wątek) – tak zawieszało się zamykanie okna."""
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
 def _safe(fn, *a):
     try:
         return fn(*a)
@@ -335,8 +391,16 @@ class ControlServer:
         self.logs = []
 
     def start(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.bind(("127.0.0.1", CONTROL_PORT))
+        for i in range(15):  # poprzedni agent może jeszcze zwalniać port
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                s.bind(("127.0.0.1", CONTROL_PORT))
+                break
+            except OSError:
+                s.close()
+                if i == 14:
+                    raise
+                time.sleep(1)
         s.listen(4)
         threading.Thread(target=self._accept, args=(s,), daemon=True).start()
 
@@ -353,11 +417,9 @@ class ControlServer:
                 c.close()
                 return
             old, self.conn = self.conn, f
-            if old:
-                try:
-                    old.close()
-                except Exception:
-                    pass
+            old_sock, self.conn_sock = getattr(self, "conn_sock", None), c
+            if old is not None and old_sock is not None:
+                _shutdown(old_sock)  # nie f.close(): zamknięcie pliku czeka na wątek, który z niego czyta
             self.sessions_changed()
             self.status()
             for line in self.logs[-50:]:
@@ -432,6 +494,22 @@ class ControlServer:
         return self.asks.pop(rid, [None, (False, False)])[1]
 
 
+def _exe_stamp():
+    try:
+        st = os.stat(sys.executable)
+        return (st.st_size, st.st_mtime)
+    except OSError:
+        return None
+
+
+def _agent_obsolete(stamp):
+    """Agent ze starego pliku programu (podmienionego) albo bez usługi nie może dalej przyjmować połączeń."""
+    if not getattr(sys, "frozen", False):
+        return False
+    from pd_common import service_registered
+    return _exe_stamp() != stamp or not service_registered()
+
+
 def run_agent():
     from pd_host import HostService
     path = machine_config_path()
@@ -444,7 +522,14 @@ def run_agent():
     ctl.svc = svc
     ctl.start()
     mtime = 0
+    exe_stamp = _exe_stamp()
+    checks = 0
     while True:
+        checks += 1
+        if checks % 5 == 0 and _agent_obsolete(exe_stamp):
+            ctl.log("Program usługi został zaktualizowany albo usunięty – ten agent kończy pracę")
+            svc.stop()
+            os._exit(0)
         try:
             m = os.path.getmtime(path)
         except OSError:
@@ -501,6 +586,7 @@ class ServiceHostProxy:
         self.relay_status = "—"
         self.running = True
         self.f = None
+        self.sock = None
         self.wlock = threading.Lock()
         self.caps = {}
         self.started = time.time()
@@ -514,11 +600,8 @@ class ServiceHostProxy:
 
     def stop(self, kick=False):
         self.running = False
-        if self.f:
-            try:
-                self.f.close()
-            except Exception:
-                pass
+        if self.sock is not None:
+            _shutdown(self.sock)
 
     def disconnect_all(self):
         self.send({"op": "kick"})
@@ -538,6 +621,10 @@ class ServiceHostProxy:
                 token = load_config(machine_config_path()).get("control_token", "")
                 s = socket.create_connection(("127.0.0.1", CONTROL_PORT), timeout=5)
                 s.settimeout(None)
+                self.sock = s
+                if not self.running:
+                    _shutdown(s)
+                    break
                 self.f = s.makefile("rwb")
                 self.send({"op": "hello", "token": token})
                 for line in self.f:
