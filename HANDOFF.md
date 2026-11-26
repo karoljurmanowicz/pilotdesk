@@ -1,6 +1,6 @@
 # PilotDesk – przekazanie projektu (handoff)
 
-Stan na: 2026-11-26 · wersja **3.6** (wydawana przez CI) · repozytorium **github.com/karoljurmanowicz/pilotdesk** (publiczne)
+Stan na: 2026-11-26 · wersja **3.7** (wydawana przez CI) · repozytorium **github.com/karoljurmanowicz/pilotdesk** (publiczne)
 
 Ten plik jest dla osoby (lub kolejnej sesji Claude), która przejmuje prace. Najpierw przeczytaj
 **„Otwarte problemy”** – pierwszy z nich zgłosił użytkownik tuż przed przekazaniem.
@@ -62,6 +62,18 @@ Jeśli problem wróci: poprosić o `pilotdesk.log` z **obu** komputerów (Ustawi
 i szukać linii „Mysz: …”, „Okno sesji …: klik”, „Wspólna mysz: przejście”, „odrzucone przez Windows”.
 Pozostałe hipotezy: UIPI (program DTF jako administrator → usługa systemowa), DPI (porównać „DPI-awareness”,
 „ekran wirtualny” i monitory mss w dzienniku).
+
+### 3.1b [3.7] „Po włączeniu usługi systemowej nie mogę się połączyć”
+Przyczyna (najbardziej prawdopodobna): usługa działa z `C:\Program Files\PilotDesk\PilotDesk.exe`, a reguła zapory
+była tylko dla `%LOCALAPPDATA%\Programs\PilotDesk\PilotDesk.exe`; dla procesów SYSTEM Windows nie pyta o zgodę.
+3.7: `pd_service.set_firewall_rules` (reguła „PilotDesk Service”: program + UDP 47802) przy instalacji i przy
+każdym starcie usługi, gdy jej brak; „Napraw zaporę” obejmuje też usługę; `trusted` w `HOST_KEYS`.
+Dzienniki usługi: `%PROGRAMDATA%\PilotDesk\logs\{service,agent,install-service}.log`.
+**Usługa przetestowana na Windows (CI):** workflow `service-test.yml` (gałęzie `claude/**`) +
+`scripts/ci_service_test.py` – instalacja, agent w sesji konsoli, połączenie hasłem przez 127.0.0.1 i adres LAN,
+obraz, kliknięcia (SendInput OK), wyszukiwanie po ID, odinstalowanie – wszystko działa. Niesprawdzone: tryb
+„Akceptuj/Odrzuć” przez okno (kanał 127.0.0.1:47803), ekran logowania/UAC. Zapora na maszynach CI jest zapewne
+wyłączona, więc sama reguła zapory nie jest tam weryfikowana.
 
 ### 3.2 Łączenie przez internet (bez wspólnej sieci) – czeka na użytkownika
 Gotowe: `pd_relay.py` (serwer asyncio, bez zależności) + `scripts/install_relay.sh` (jedno polecenie:

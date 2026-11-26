@@ -1,5 +1,11 @@
 # Co nowego w PilotDesk
 
+## 3.7
+- Naprawione: po włączeniu usługi systemowej nie można było połączyć się z komputerem – zapora Windows blokowała usługę (działa ona z osobnej kopii programu, której nie obejmowała dotychczasowa reguła). Usługa sama dodaje teraz regułę zapory, także na komputerach, na których została zainstalowana wcześniej.
+- Zapamiętane komputery („Zapamiętaj ten komputer”) działają także w trybie usługi.
+- Dziennik usługi: %PROGRAMDATA%\PilotDesk\logs.
+- Usługa jest teraz automatycznie testowana na prawdziwym Windows (instalacja, połączenie, obraz, kliknięcia, wyszukiwanie po ID).
+
 ## 3.6
 - Naprawione: kliknięcia nie działały w oknie sesji, gdy na sterowanym komputerze była włączona „Wspólna mysz” – zdalny ruch kursora do krawędzi ekranu przełączał mysz na drugi komputer i od tej chwili wszystkie kliknięcia były połykane.
 - Mysz w Windows sterowana bezpośrednio (SendInput): kliknięcie trafia dokładnie w miejsce kursora, a gdy Windows je odrzuci (ekran blokady, okno UAC, program uruchomiony jako administrator), PilotDesk pokazuje komunikat z rozwiązaniem.
