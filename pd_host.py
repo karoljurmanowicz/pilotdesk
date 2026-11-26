@@ -16,7 +16,7 @@ import pd_media as MEDIA
 import pd_winutil as W
 from pd_common import (
     DEFAULT_PORT, DEFAULT_RELAY_PORT, M_AUDIO, M_FILE, M_FRAME, M_JSON, M_VIDEO, AuthError, FileReceiver,
-    downloads_dir, get_mac, has_password, host_handshake, hostname, iter_path_files, list_dir, open_tcp,
+    downloads_dir, get_mac, has_password, note_remote_input, host_handshake, hostname, iter_path_files, list_dir, open_tcp,
     parse_hostport, recv_line, send_file, send_line, send_wol, tune_socket,
 )
 
@@ -31,6 +31,15 @@ if sys.platform == "win32":  # współrzędne w pikselach fizycznych (skalowanie
             pass
 
 TILE = 64
+
+
+def _log(msg):
+    try:
+        import pd_log
+        pd_log.info("%s", msg)
+    except Exception:
+        pass
+
 MOD_NAMES = ("ctrl", "ctrl_l", "ctrl_r", "alt", "alt_l", "alt_r", "alt_gr", "shift", "shift_l",
              "shift_r", "cmd", "cmd_l", "cmd_r")
 BITRATES = {85: 8_000_000, 60: 4_000_000, 45: 2_000_000, 30: 800_000}
@@ -379,6 +388,9 @@ class HostSession:
         self.outq = queue.Queue(maxsize=2000)
         self._uipi_check = 0.0
         self._uipi_told = 0.0
+        self.win_mouse = sys.platform == "win32"  # mysz przez własne SendInput (pd_winutil), nie pynput
+        self._clicks_logged = 0
+        self._click_fail_told = 0.0
 
     # ---------------------------------------------------------------- pętla główna
     def stop(self):
@@ -419,6 +431,11 @@ class HostSession:
             self.input_ok = True
         except Exception as e:
             self.svc.log(f"Sterowanie myszą/klawiaturą niedostępne: {e}")
+        if self.win_mouse:
+            try:
+                _log(f"Sesja {self.client}: {W.dpi_info()}, monitory przechwytywania: {self.monitors_info()}")
+            except Exception as e:
+                _log(f"Diagnostyka DPI nieudana: {e}")
         try:
             import pyperclip  # noqa
             self.clip = CF.ClipboardSync(
@@ -711,7 +728,10 @@ class HostSession:
         self.pressed_keys.clear()
         for b in list(self.pressed_buttons):
             try:
-                self.mouse.release(b)
+                if isinstance(b, str):
+                    W.mouse_button(None, None, b, False)
+                else:
+                    self.mouse.release(b)
             except Exception:
                 pass
         self.pressed_buttons.clear()
@@ -824,29 +844,86 @@ class HostSession:
         except Exception as e:
             self.svc.log(f"Błąd obsługi '{t}': {e}")
 
-    def _check_uipi(self):
+    def _check_uipi(self, point=None):
         """Windows nie pozwala zwykłemu programowi sterować oknem uruchomionym jako administrator (UIPI).
-        Wykrywamy to i mówimy wprost, co zrobić."""
+        Wykrywamy to i mówimy wprost, co zrobić. Dla kliknięć sprawdzamy okno pod kursorem, dla klawiszy –
+        okno na pierwszym planie."""
         now = time.time()
-        if sys.platform != "win32" or self.svc.agent_mode or now - self._uipi_check < 2:
-            return
+        if sys.platform != "win32" or self.svc.agent_mode or now - self._uipi_check < 1:
+            return False
         self._uipi_check = now
         try:
             if W.is_admin():
-                return
-            title, elevated = W.foreground_info()
+                return False
+            title, elevated = W.window_info_at(*point) if point else W.foreground_info()
         except Exception:
-            return
+            return False
         if elevated and now - self._uipi_told > 60:
             self._uipi_told = now
             self.svc.log(f"Okno „{title}” działa jako administrator – Windows blokuje jego sterowanie")
             self.send_json({"t": "notice", "kind": "warn", "text":
                             f"Okno „{title[:40]}” na komputerze zdalnym działa jako administrator, więc Windows "
-                            "blokuje jego sterowanie. Rozwiązanie: na tamtym komputerze PilotDesk → Dostęp → "
+                            "blokuje klikanie w nim. Rozwiązanie: na tamtym komputerze PilotDesk → Dostęp → "
                             "Usługa systemowa → Zainstaluj."})
+        return elevated
+
+    def monitors_info(self):
+        try:
+            import mss
+            with mss.mss() as sct:
+                return [(m["left"], m["top"], m["width"], m["height"]) for m in sct.monitors]
+        except Exception as e:
+            return f"? ({e})"
+
+    def _click_failed(self, button, p, err):
+        """SendInput odrzucił kliknięcie – zwykle ekran blokady, okno UAC albo program działający jako administrator."""
+        _log(f"Kliknięcie {button} w {p} odrzucone przez Windows (SendInput, błąd {err})")
+        now = time.time()
+        if now - self._click_fail_told < 30:
+            return
+        self._click_fail_told = now
+        why = ("na komputerze zdalnym jest ekran blokady, okno UAC (Kontrola konta użytkownika) albo program "
+               "uruchomiony jako administrator") if err == 5 else f"kod błędu {err}"
+        self.send_json({"t": "notice", "kind": "warn", "text":
+                        f"Windows na komputerze zdalnym zablokował kliknięcie ({why}). Rozwiązanie: na tamtym "
+                        "komputerze PilotDesk → Dostęp → Usługa systemowa → Zainstaluj."})
+
+    def _mouse_win(self, t, m):
+        """Mysz w Windows: bezpośrednio SendInput – ruch i przycisk w jednym zdarzeniu, z kontrolą wyniku."""
+        if t == "mouse_move":
+            p = self._pos(m)
+            if p:
+                W.mouse_move(*p)
+        elif t == "mouse_btn":
+            b = m.get("b")
+            if b not in ("left", "right", "middle"):
+                return
+            p = self._pos(m)
+            down = bool(m.get("down"))
+            if down:
+                self._check_uipi(p)
+            ok, err = W.mouse_button(p[0] if p else None, p[1] if p else None, b, down)
+            (self.pressed_buttons.add if down else self.pressed_buttons.discard)(b)
+            if self._clicks_logged < 6:
+                self._clicks_logged += 1
+                _log(f"Mysz: {b} {'wciśnięty' if down else 'puszczony'} w {p} → "
+                     f"{'OK' if ok else f'BŁĄD {err}'}")
+            if not ok:
+                self._click_failed(b, p, err)
+        elif t == "wheel":
+            W.mouse_wheel(int(m.get("dx", 0)), int(m.get("dy", 0)))
 
     def _handle_input(self, t, m):
-        if t in ("mouse_btn", "key") and m.get("down"):
+        if t in ("mouse_move", "mouse_btn", "wheel"):
+            note_remote_input()
+        if t in ("mouse_move", "mouse_btn", "wheel") and self.win_mouse:
+            try:
+                self._mouse_win(t, m)
+                return
+            except Exception as e:  # awaryjnie wracamy do pynput
+                self.win_mouse = False
+                _log(f"Bezpośrednie SendInput niedostępne ({e!r}) – używam pynput")
+        if t == "key" and m.get("down"):
             self._check_uipi()
         if t == "mouse_move":
             p = self._pos(m)
@@ -857,6 +934,8 @@ class HostSession:
             if b is None:
                 return
             p = self._pos(m)
+            if m.get("down"):
+                self._check_uipi(p)
             if p:
                 self.mouse.position = p
             if m.get("down"):

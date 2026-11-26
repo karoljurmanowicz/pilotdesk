@@ -1,6 +1,6 @@
 # PilotDesk – przekazanie projektu (handoff)
 
-Stan na: 2026-11-26 · wersja **3.5** (opublikowana) · repozytorium **github.com/karoljurmanowicz/pilotdesk** (publiczne)
+Stan na: 2026-11-26 · wersja **3.6** (wydawana przez CI) · repozytorium **github.com/karoljurmanowicz/pilotdesk** (publiczne)
 
 Ten plik jest dla osoby (lub kolejnej sesji Claude), która przejmuje prace. Najpierw przeczytaj
 **„Otwarte problemy”** – pierwszy z nich zgłosił użytkownik tuż przed przekazaniem.
@@ -38,33 +38,30 @@ automatyczne aktualizacje z GitHub Releases, dziennik zdarzeń z wykrywaniem zaw
 
 ## 3. Otwarte problemy (priorytet)
 
-### 3.1 [ZGŁOSZONE, NIEROZWIĄZANE] Przyciski myszy nie działają w oknie sesji („współdzielony ekran”)
-Ostatnia wiadomość użytkownika (po wydaniu 3.5): *„przyciski myszki nie działają we współdzielonym ekranie”*.
-Wcześniej zgłosił też „nie działa sterowanie myszką” i zawieszenie programu na PC 2 oraz że „Rozłącz” nie
-rozłączał – 3.5 naprawia blokowanie wątku wejścia i rozłączania (patrz CHANGELOG), ale **kliknięcia nadal nie
-działają**. Nie wiadomo, który komputer steruje którym ani czy dotyczy to wszystkich okien.
+### 3.1 [3.6 – POPRAWKA WYDANA, CZEKA NA POTWIERDZENIE] Przyciski myszy nie działają w oknie sesji
+Zgłoszenie (po 3.5): *„przyciski myszki nie działają we współdzielonym ekranie”* – ruch działał, kliknięcia nie.
 
-Hipotezy w kolejności prawdopodobieństwa:
-1. **UIPI** – okno docelowe działa jako administrator (oprogramowanie DTF). Windows wtedy pozwala przesuwać
-   kursor (`SetCursorPos`), ale **blokuje kliknięcia z `SendInput`** – dokładnie „ruch działa, przyciski nie”.
-   3.5 wykrywa to (`HostSession._check_uipi` → `pd_winutil.foreground_info`) i wysyła toast do przeglądającego.
-   Rozwiązanie dla użytkownika: na sterowanym PC „Dostęp → Usługa systemowa → Zainstaluj” (agent działa jako
-   SYSTEM, omija UIPI). **Usługa nie była nigdy przetestowana na prawdziwym Windows** (patrz §7).
-2. Kliknięcia trafiają w złe miejsce (DPI/skalowanie 125–150%): `mss` i `pynput` muszą używać tych samych
-   (fizycznych) współrzędnych. `pd_host.py` ustawia `SetProcessDpiAwareness(2)` przy imporcie, ale w trybie
-   z oknem customtkinter ustawia to wcześniej – sprawdzić faktyczny tryb (`GetProcessDpiAwareness`) i porównać
-   `mss.monitors` z `GetSystemMetrics`. Objaw: kursor na obrazie jest gdzie indziej niż kliknięcie.
-3. Problem po stronie przeglądającego (Tk na Windows): sprawdzić, czy `SessionView.on_button` w ogóle się
-   wywołuje (bind `<ButtonPress>` na `tk.Canvas`) i czy `self.view` jest ustawione (ustawia je `_render`).
+Co zrobiono w 3.6:
+1. **Znaleziony i naprawiony błąd we „Wspólnej myszy”** (odtworzony w teście): `HostSession` przesuwa kursor,
+   pynput przekazuje taki ruch do `EdgeSwitch` w tym samym procesie (`Controller._emit`), więc zdalny ruch do
+   krawędzi ekranu przełączał wspólną mysz na drugi komputer → haki `suppress=True` połykały wszystkie
+   kliknięcia (`SetCursorPos` omija hak, więc ruch nadal działał). Teraz `EdgeSwitch` ignoruje ruchy
+   `injected` i ruchy w ciągu 1 s od zdalnego wejścia (`pd_common.note_remote_input/remote_input_recent`).
+   Uwaga: w trybie usługi (agent w osobnym procesie) działa tylko flaga `injected` (LLMHF_INJECTED).
+2. Mysz w Windows przez własne `SendInput` (`pd_winutil.mouse_move/mouse_button/mouse_wheel`):
+   `SetCursorPos` + zdarzenie z `MOVE|ABSOLUTE|VIRTUALDESK` i przyciskiem, znacznik `dwExtraInfo=PD_INPUT_TAG`,
+   sprawdzanie wyniku; odrzucenie (np. błąd 5 – ekran blokady/UAC) → wpis w dzienniku i toast u przeglądającego.
+   Przy wyjątku automatyczny powrót do pynput. Klawiatura nadal przez pynput.
+3. UIPI: `_check_uipi(point)` sprawdza okno **pod kursorem** (`window_info_at`), dla klawiszy – pierwszy plan.
+4. Dziennik: tryb DPI + ekran wirtualny + monitory mss na starcie sesji, pierwsze 6 zdarzeń przycisków
+   z wynikiem (host) i pierwsze 3 kliknięcia z pozycją (przeglądający).
+5. Autotest CI (`launcher.mouse_selftest`): rozmiar struktury INPUT (musi być 40/28 – inaczej błąd wydania)
+   oraz prawdziwe kliknięcie w okno Tk na maszynie Windows (`click_received` – tylko informacyjnie).
 
-Jak zdiagnozować:
-- Poproś o `pilotdesk.log` z **obu** komputerów (Ustawienia → Dziennik zdarzeń → Otwórz;
-  `%LOCALAPPDATA%\PilotDesk\pilotdesk.log`) i o odpowiedź: czy klikanie nie działa **wszędzie** (pulpit,
-  pasek zadań), czy tylko w konkretnym programie. Jeśli tylko w programie DTF → UIPI (hipoteza 1).
-- Dodaj tymczasowe logowanie w `HostSession._handle_input` dla `mouse_btn` (pozycja, przycisk, wynik)
-  i rozważ zastąpienie `pynput` przy kliknięciach bezpośrednim `SendInput` przez ctypes (ten sam wątek co
-  `SetCursorPos`), żeby mieć kontrolę nad flagami (`MOUSEEVENTF_ABSOLUTE|MOUSEEVENTF_VIRTUALDESK`).
-  Uwaga: przy blokadzie UIPI `SendInput` **nie zwraca błędu** – trzeba sprawdzać integralność okna.
+Jeśli problem wróci: poprosić o `pilotdesk.log` z **obu** komputerów (Ustawienia → Dziennik zdarzeń → Otwórz)
+i szukać linii „Mysz: …”, „Okno sesji …: klik”, „Wspólna mysz: przejście”, „odrzucone przez Windows”.
+Pozostałe hipotezy: UIPI (program DTF jako administrator → usługa systemowa), DPI (porównać „DPI-awareness”,
+„ekran wirtualny” i monitory mss w dzienniku).
 
 ### 3.2 Łączenie przez internet (bez wspólnej sieci) – czeka na użytkownika
 Gotowe: `pd_relay.py` (serwer asyncio, bez zależności) + `scripts/install_relay.sh` (jedno polecenie:
@@ -151,7 +148,7 @@ użytkownika). Logo: dwa nachodzące ekrany + zielona kropka.
 
 ## 9. Następne kroki (propozycja)
 
-1. Rozwiązać §3.1 (kliknięcia): zebrać logi, ustalić UIPI vs DPI, ewentualnie bezpośredni `SendInput`.
+1. Potwierdzić z użytkownikiem §3.1 (kliknięcia) po aktualizacji do 3.6; w razie czego – logi z obu PC.
 2. Dokończyć §3.2 (relay na serwerze użytkownika) i wpisać domyślny adres w programie.
 3. Na prawdziwym Windows przejść listę §3.3 (najpierw usługa systemowa – rozwiązuje też UIPI).
 4. Rozważyć podpis cyfrowy exe (SmartScreen) i ewentualnie przejście z PyInstaller onefile na onedir

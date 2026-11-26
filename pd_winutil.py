@@ -178,6 +178,123 @@ def block_input(on):
     return bool(user32.BlockInput(bool(on)))
 
 
+# --------------------------------------------------------------------------- wstrzykiwanie myszy (SendInput)
+# Własna implementacja zamiast pynput: kliknięcie idzie razem z ruchem w jednym zdarzeniu (dokładnie w punkcie
+# kursora), sprawdzamy wynik SendInput i kod błędu, a zdarzenia mają znacznik PD_INPUT_TAG (dwExtraInfo).
+PD_INPUT_TAG = 0x50444B31  # "PDK1"
+_MOUSE = {}
+
+
+def _mouse_api():
+    if _MOUSE:
+        return _MOUSE
+    ULONG_PTR = ctypes.c_size_t
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
+                    ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ULONG_PTR)]
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD), ("dwExtraInfo", ULONG_PTR)]
+
+    class HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [("uMsg", wintypes.DWORD), ("wParamL", wintypes.WORD), ("wParamH", wintypes.WORD)]
+
+    class _U(ctypes.Union):
+        _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT), ("hi", HARDWAREINPUT)]
+
+    class INPUT(ctypes.Structure):
+        _anonymous_ = ("u",)
+        _fields_ = [("type", wintypes.DWORD), ("u", _U)]
+
+    u32 = ctypes.WinDLL("user32", use_last_error=True)  # osobny obiekt – nie zmieniamy argtypes pynput
+    u32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+    u32.SendInput.restype = wintypes.UINT
+    u32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    u32.GetSystemMetrics.argtypes = [ctypes.c_int]
+    _MOUSE.update(INPUT=INPUT, MOUSEINPUT=MOUSEINPUT, u32=u32)
+    return _MOUSE
+
+
+MOUSEEVENTF_MOVE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_VIRTUALDESK = 0x0001, 0x8000, 0x4000
+MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL = 0x0800, 0x1000
+_BTN_FLAGS = {("left", True): 0x0002, ("left", False): 0x0004, ("right", True): 0x0008, ("right", False): 0x0010,
+              ("middle", True): 0x0020, ("middle", False): 0x0040}
+
+
+def virtual_screen():
+    """(x, y, szer, wys) całego pulpitu wirtualnego w pikselach widzianych przez ten proces."""
+    if not IS_WIN:
+        return (0, 0, 0, 0)
+    g = _mouse_api()["u32"].GetSystemMetrics
+    return (g(76), g(77), g(78), g(79))  # SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN
+
+
+def _send_mouse(flags, x=None, y=None, data=0):
+    """Zwraca (ok, kod_błędu)."""
+    api = _mouse_api()
+    dx = dy = 0
+    if x is not None:
+        vx, vy, vw, vh = virtual_screen()
+        if vw > 0 and vh > 0:
+            # wartości 0..65535 – zaokrąglenie w górę daje dokładnie ten piksel po przeliczeniu przez Windows
+            dx = min(max(((x - vx) * 65536 + vw - 1) // vw, 0), 65535)
+            dy = min(max(((y - vy) * 65536 + vh - 1) // vh, 0), 65535)
+            flags |= MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+    inp = api["INPUT"](type=0)
+    inp.mi = api["MOUSEINPUT"](dx=dx, dy=dy, mouseData=ctypes.c_uint32(int(data)).value, dwFlags=flags, time=0,
+                               dwExtraInfo=PD_INPUT_TAG)
+    n = api["u32"].SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+    return (n == 1, 0 if n == 1 else ctypes.get_last_error())
+
+
+def mouse_move(x, y):
+    """Ustawia kursor dokładnie w (x, y) i wysyła zdarzenie ruchu (programy widzą ruch jak z myszy)."""
+    api = _mouse_api()
+    api["u32"].SetCursorPos(int(x), int(y))
+    return _send_mouse(0, int(x), int(y))
+
+
+def mouse_button(x, y, button, down):
+    """Wciśnięcie/puszczenie przycisku w punkcie (x, y). Zwraca (ok, kod_błędu)."""
+    flag = _BTN_FLAGS.get((button, bool(down)))
+    if flag is None:
+        return (False, 87)
+    if x is not None:
+        _mouse_api()["u32"].SetCursorPos(int(x), int(y))
+    return _send_mouse(flag, None if x is None else int(x), None if y is None else int(y))
+
+
+def mouse_wheel(dx, dy):
+    ok, err = True, 0
+    if dy:
+        ok, err = _send_mouse(MOUSEEVENTF_WHEEL, data=int(dy) * 120)
+    if dx:
+        ok2, err2 = _send_mouse(MOUSEEVENTF_HWHEEL, data=int(dx) * 120)
+        ok, err = ok and ok2, err or err2
+    return ok, err
+
+
+def dpi_info():
+    """Opis trybu DPI procesu (do dziennika – kliknięcia w złym miejscu przy skalowaniu 125–150%)."""
+    if not IS_WIN:
+        return ""
+    parts = []
+    try:
+        aw = ctypes.c_int(-1)
+        ctypes.WinDLL("shcore").GetProcessDpiAwareness(None, ctypes.byref(aw))
+        parts.append(f"DPI-awareness={aw.value}")
+    except Exception as e:
+        parts.append(f"DPI-awareness=? ({e})")
+    try:
+        parts.append(f"ekran wirtualny={virtual_screen()}")
+        parts.append(f"DPI systemu={ctypes.WinDLL('user32').GetDpiForSystem()}")
+    except Exception:
+        pass
+    return ", ".join(parts)
+
+
 _current_desktop = {"name": None}
 
 
@@ -206,12 +323,34 @@ def sync_input_desktop():
     return False
 
 
+def window_info_at(x, y):
+    """(tytuł, czy działa jako administrator) okna głównego pod punktem (x, y) – tam trafia kliknięcie."""
+    if not IS_WIN:
+        return "", False
+    u = ctypes.WinDLL("user32", use_last_error=True)
+    u.WindowFromPoint.argtypes = [wintypes.POINT]
+    u.WindowFromPoint.restype = wintypes.HWND
+    u.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+    u.GetAncestor.restype = wintypes.HWND
+    hwnd = u.WindowFromPoint(wintypes.POINT(int(x), int(y)))
+    if not hwnd:
+        return "", False
+    return _window_elevation(u.GetAncestor(hwnd, 2) or hwnd)  # GA_ROOT
+
+
 def foreground_info():
     """(tytuł okna na pierwszym planie, czy jego proces działa jako administrator). Tylko Windows."""
     if not IS_WIN:
         return "", False
-    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     user32.GetForegroundWindow.restype = wintypes.HWND
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return "", False
+    return _window_elevation(hwnd)
+
+
+def _window_elevation(hwnd):
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -220,9 +359,6 @@ def foreground_info():
     advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
     advapi32.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
                                              ctypes.POINTER(wintypes.DWORD)]
-    hwnd = user32.GetForegroundWindow()
-    if not hwnd:
-        return "", False
     buf = ctypes.create_unicode_buffer(200)
     user32.GetWindowTextW(hwnd, buf, 200)
     pid = wintypes.DWORD()

@@ -1,5 +1,11 @@
 # Co nowego w PilotDesk
 
+## 3.6
+- Naprawione: kliknięcia nie działały w oknie sesji, gdy na sterowanym komputerze była włączona „Wspólna mysz” – zdalny ruch kursora do krawędzi ekranu przełączał mysz na drugi komputer i od tej chwili wszystkie kliknięcia były połykane.
+- Mysz w Windows sterowana bezpośrednio (SendInput): kliknięcie trafia dokładnie w miejsce kursora, a gdy Windows je odrzuci (ekran blokady, okno UAC, program uruchomiony jako administrator), PilotDesk pokazuje komunikat z rozwiązaniem.
+- Wykrywanie okna administratora sprawdza okno pod kursorem (tam trafia kliknięcie), a nie tylko okno na pierwszym planie.
+- Dziennik zdarzeń zapisuje pierwsze kliknięcia sesji (po obu stronach), tryb DPI i układ monitorów – łatwiej znaleźć przyczynę, gdyby problem wrócił.
+
 ## 3.5
 - Naprawione: sterowanie myszą i klawiaturą mogło przestać działać, gdy przesyłanie obrazu się zatykało – obsługa myszy nie czeka już na sieć.
 - Naprawione: „Rozłącz” działa od razu, nawet gdy połączenie jest zablokowane.

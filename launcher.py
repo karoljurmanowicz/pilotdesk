@@ -74,9 +74,53 @@ def selftest(out):
         report["ok"] &= report["fonts_bundled"]
     except Exception as e:
         report["fonts_error"] = str(e)
+    if sys.platform == "win32":
+        try:
+            report["mouse_inject"] = mouse_selftest()
+            report["ok"] &= report["mouse_inject"].get("struct_ok", False)
+        except Exception:
+            report["mouse_inject"] = {"error": traceback.format_exc()}
+            report["ok"] = False
     with open(out, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
     return 0 if report["ok"] else 1
+
+
+def mouse_selftest():
+    """Sprawdza wstrzykiwanie myszy (SendInput) na prawdziwym Windows: kliknięcie w okno Tk musi dotrzeć.
+    Brak interaktywnego pulpitu na maszynie CI nie psuje testu – zapisujemy tylko wynik."""
+    import ctypes
+    import tkinter as tk
+    import pd_winutil as W
+    api = W._mouse_api()
+    size = ctypes.sizeof(api["INPUT"])
+    r = {"input_size": size, "struct_ok": size == (40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28),
+         "virtual_screen": W.virtual_screen(), "dpi": W.dpi_info()}
+    got = []
+    root = tk.Tk()
+    root.geometry("240x240+120+120")
+    root.attributes("-topmost", True)
+    c = tk.Canvas(root, width=240, height=240, bg="#202020")
+    c.pack()
+    c.bind("<ButtonPress>", lambda e: got.append(("down", e.num)))
+    c.bind("<ButtonRelease>", lambda e: got.append(("up", e.num)))
+    for _ in range(20):
+        root.update()
+        time.sleep(0.02)
+    root.focus_force()
+    x = c.winfo_rootx() + 120
+    y = c.winfo_rooty() + 120
+    r["move"] = W.mouse_move(x, y)
+    r["down"] = W.mouse_button(x, y, "left", True)
+    r["up"] = W.mouse_button(x, y, "left", False)
+    end = time.time() + 1.5
+    while time.time() < end and len(got) < 2:
+        root.update()
+        time.sleep(0.02)
+    root.destroy()
+    r["tk_events"] = got
+    r["click_received"] = ("down", 1) in got and ("up", 1) in got
+    return r
 
 
 def run():

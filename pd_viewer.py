@@ -910,6 +910,11 @@ class SessionView(ctk.CTkFrame):
         names = {1: "left", 2: "right", 3: "middle"} if IS_MAC else {1: "left", 2: "middle", 3: "right"}
         b = names.get(e.num)
         p = self._norm(e)
+        if down and getattr(self, "_clicks_logged", 0) < 3:  # diagnostyka: czy kliknięcia w ogóle wychodzą
+            self._clicks_logged = getattr(self, "_clicks_logged", 0) + 1
+            import pd_log
+            pd_log.info("Okno sesji %s: klik num=%s → %s, pozycja %s, obraz %s", self.remote_name, e.num, b, p,
+                        self.view)
         if b and p:
             self.pending_move = None
             self.send_json({"t": "mouse_btn", "b": b, "down": down, "x": p[0], "y": p[1]})

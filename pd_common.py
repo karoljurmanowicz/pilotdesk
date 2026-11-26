@@ -29,7 +29,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 APP_NAME = "PilotDesk"
-VERSION = "3.5"
+VERSION = "3.6"
 DEFAULT_UPDATE_SOURCE = "karoljurmanowicz/pilotdesk"  # GitHub: właściciel/repozytorium (zakładka Releases)
 PROTO = 2
 DEFAULT_PORT = 47800        # połączenia bezpośrednie (LAN / VPN / przekierowanie portu)
@@ -38,6 +38,18 @@ CHUNK = 64 * 1024           # rozmiar kawałka pliku
 MAX_MSG = 64 * 1024 * 1024
 MAX_PLAIN = 64 * 1024
 AUTH_MAGIC = "pilotdesk-auth-v2"
+
+# Kiedy ostatnio zdalna sesja poruszyła myszą tego komputera. Wspólna mysz (pd_kvm.EdgeSwitch) nie może brać
+# takich ruchów za ruch fizycznej myszy – inaczej przełączała się na drugi komputer i połykała kliknięcia.
+REMOTE_INPUT = {"t": 0.0}
+
+
+def note_remote_input():
+    REMOTE_INPUT["t"] = time.time()
+
+
+def remote_input_recent(window=1.0):
+    return time.time() - REMOTE_INPUT["t"] < window
 
 # typy wiadomości wewnątrz zaszyfrowanego kanału
 M_JSON, M_FRAME, M_FILE, M_VIDEO, M_AUDIO = 1, 2, 3, 4, 5

@@ -12,7 +12,7 @@ import queue
 import threading
 import time
 
-from pd_common import M_FILE, M_JSON, FileReceiver, send_file
+from pd_common import M_FILE, M_JSON, FileReceiver, remote_input_recent, send_file
 
 SIDES = ("right", "left", "top", "bottom")
 SIDE_NAMES = {"right": "po prawej", "left": "po lewej", "top": "nad", "bottom": "pod"}
@@ -280,8 +280,11 @@ class EdgeSwitch:
             return (a, rh - 1) if 0 <= a < span else None
         return None
 
-    def _watch_move(self, x, y):
-        if not self.running or self.remote or not self.link.connected:
+    def _watch_move(self, x, y, injected=False):
+        # injected = ruch wykonany programowo (np. ktoś steruje tym komputerem przez PilotDesk), a nie fizyczną
+        # myszą. Taki ruch NIE może przełączać myszy na drugi komputer – inaczej haki z suppress=True
+        # połykały wszystkie zdalne kliknięcia (ruch kursora działał, przyciski nie).
+        if injected or remote_input_recent() or not self.running or self.remote or not self.link.connected:
             self.edge_since = None
             return
         entry = self._at_edge(x, y)
@@ -299,7 +302,7 @@ class EdgeSwitch:
             self.enter(*entry)
 
     def _delayed_check(self):
-        if self.edge_since is None or self.remote or not self.running:
+        if self.edge_since is None or self.remote or not self.running or remote_input_recent():
             return
         entry = self._at_edge(*self.mouse.position)
         if entry is not None:
@@ -325,6 +328,11 @@ class EdgeSwitch:
             self.kl = keyboard.Listener(on_press=self._r_press, on_release=self._r_release, suppress=True)
             self.ml.start()
             self.kl.start()
+        try:
+            import pd_log
+            pd_log.info("Wspólna mysz: przejście na %s (wejście w %s, %s)", self.link.name, rx, ry)
+        except Exception:
+            pass
         self.on_state("remote")
 
     def leave(self, reason="edge", local_pos=None):
@@ -332,6 +340,11 @@ class EdgeSwitch:
             if not self.remote:
                 return
             self.remote = False
+            try:
+                import pd_log
+                pd_log.info("Wspólna mysz: powrót na ten komputer (%s)", reason)
+            except Exception:
+                pass
             for p in list(self.pressed.values()):  # puść wszystko po drugiej stronie
                 self.send({"t": "key", "down": False, "k": p})
             for b in list(self.buttons):
@@ -368,8 +381,8 @@ class EdgeSwitch:
     def _send_pos(self):
         self.send({"t": "mouse_move", "x": self._nx(), "y": self._ny()})
 
-    def _r_move(self, x, y):
-        if not self.remote:
+    def _r_move(self, x, y, injected=False):
+        if not self.remote or injected:
             return
         cx, cy = self.center
         ddx, ddy = x - cx, y - cy
@@ -403,8 +416,8 @@ class EdgeSwitch:
         except Exception:
             pass
 
-    def _r_click(self, x, y, button, pressed):
-        if not self.remote:
+    def _r_click(self, x, y, button, pressed, injected=False):
+        if not self.remote or injected:
             return
         name = getattr(button, "name", "left")
         if name not in ("left", "right", "middle"):
@@ -412,12 +425,12 @@ class EdgeSwitch:
         (self.buttons.add if pressed else self.buttons.discard)(name)
         self.send({"t": "mouse_btn", "b": name, "down": pressed, "x": self._nx(), "y": self._ny()})
 
-    def _r_scroll(self, x, y, dx, dy):
-        if self.remote:
+    def _r_scroll(self, x, y, dx, dy, injected=False):
+        if self.remote and not injected:
             self.send({"t": "wheel", "dx": int(dx), "dy": int(dy)})
 
-    def _r_press(self, key):
-        if not self.remote:
+    def _r_press(self, key, injected=False):
+        if not self.remote or injected:
             return
         from pynput.keyboard import Key
         if key in (Key.ctrl, Key.ctrl_l, Key.ctrl_r):
@@ -434,7 +447,9 @@ class EdgeSwitch:
             self.pressed[str(key)] = p
         self.send({"t": "key", "down": True, "k": p})
 
-    def _r_release(self, key):
+    def _r_release(self, key, injected=False):
+        if injected:
+            return
         from pynput.keyboard import Key
         if key in (Key.ctrl, Key.ctrl_l, Key.ctrl_r):
             self.mods.discard("ctrl")
