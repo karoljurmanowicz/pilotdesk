@@ -1,5 +1,15 @@
 # Co nowego w PilotDesk
 
+## 3.11
+- Lepsza jakość obrazu: nowy domyślny tryb „Najlepsza jakość (ostry tekst)” – pełna informacja o kolorze (4:4:4) i stała jakość obrazu zamiast niskiej przepływności; limit dopasowany do rozdzielczości.
+- Ostrzejsze powiększanie na dużych monitorach (np. obraz 1080p na monitorze 4K): powiększenie 2× bez rozmycia, lepsze filtry przy innych skalach.
+- Nowe menu „Skala obrazu” w oknie sesji: Dopasuj do okna, Ostre piksele, 100%, 150%, 200%.
+- Zmiana rozdzielczości komputera zdalnego (Windows) z menu „Skala obrazu” – po rozłączeniu wraca oryginalna.
+- Naprawione: pliki skopiowane Ctrl+C na jednym komputerze nie dawały się wkleić Ctrl+V na drugim (Windows odrzucał je ze schowka). Kopiowanie tekstu i plików sprawdzone automatycznie w obie strony, także w trybie usługi.
+- Nowy menedżer plików w stylu Eksploratora Windows: drzewo folderów („Ten komputer”, Pulpit, Dokumenty, Pobrane, dyski), kolumny Nazwa / Data modyfikacji / Typ / Rozmiar, sortowanie, menu pod prawym przyciskiem, skróty F2, F5, Delete, Backspace.
+- Przeciąganie plików (drag & drop): między panelami menedżera plików, z Eksploratora Windows na panel komputera zdalnego, a także bezpośrednio na okno sesji – pliki trafiają wtedy na pulpit komputera zdalnego.
+- W trybie usługi Pulpit i Pobrane wskazują foldery zalogowanego użytkownika (wcześniej folder systemowy).
+
 ## 3.10
 - Okienko „Sesja zdalna aktywna” na sterowanym komputerze można zminimalizować (przycisk „–”) do małej karteczki „● Zdalnie” w rogu ekranu. Kliknięcie karteczki rozwija okienko, można ją też przeciągnąć. PilotDesk zapamiętuje wybór na kolejne sesje.
 

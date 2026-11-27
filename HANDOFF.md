@@ -1,6 +1,6 @@
 # PilotDesk – przekazanie projektu (handoff)
 
-Stan na: 2026-11-26 · wersja **3.10** (wydawana przez CI) · repozytorium **github.com/karoljurmanowicz/pilotdesk** (publiczne)
+Stan na: 2026-11-26 · wersja **3.11** (wydawana przez CI) · repozytorium **github.com/karoljurmanowicz/pilotdesk** (publiczne)
 
 Ten plik jest dla osoby (lub kolejnej sesji Claude), która przejmuje prace. Najpierw przeczytaj
 **„Otwarte problemy”** – pierwszy z nich zgłosił użytkownik tuż przed przekazaniem.
@@ -115,6 +115,25 @@ zamknięte” = host zamknął gniazdo **przed wysłaniem hello**. Przyczyna nie
 Po 3.9 połączenia, usługa i kliknięcia działają. Prośba: minimalizowanie okienka „Sesja zdalna aktywna”
 (`pd_viewer.ConnectedBanner`) – 3.10: przycisk „–” → karteczka „● Zdalnie” (klik = rozwiń, przeciąganie),
 stan w `cfg["banner_minimized"]`. Celowo nie da się go ukryć całkiem (bezpieczeństwo – widać, że ktoś steruje).
+
+### 3.1g [3.11] Jakość obrazu, rozdzielczość, schowek, Eksplorator, drag & drop
+- **Jakość**: libx264 w trybie „Najlepsza jakość (ostry tekst)” (quality ≥ 80) = yuv444p + CRF 17 + preset superfast,
+  limit VBV z `pd_host.bitrate_for` (skalowany do pikseli); pozostałe tryby CRF 22/26/30 (4:2:0). JPEG 4:4:4 przy
+  q ≥ 80. Domyślny preset = najlepsza jakość. Podgląd: `SessionView.zoom` ("fit"|"sharp"|1.0|1.5|2.0, zapamiętane
+  w `cfg["view_zoom"]`), skala ≈ 2× przyciągana do całkowitej + NEAREST, BICUBIC przy powiększaniu, BOX przy
+  zmniejszaniu.
+- **Rozdzielczość zdalna** (Windows): `pd_winutil.display_modes / set_display_mode / restore_display_mode`
+  (DEVMODEW = 220 B, sprawdzane w autoteście), komunikaty `display_modes` / `set_resolution` / `resolution_result`,
+  przywracanie w `HostSession.run` finally; po zmianie `reset_capture` odtwarza mss.
+- **Schowek**: `pd_clipfiles.set_files` – `OpenClipboard(NULL)` + `EmptyClipboard` powodowało ciche niepowodzenie
+  `SetClipboardData` (pliki nigdy nie trafiały do schowka). Teraz niewidoczne okno-właściciel na wątek. Test CI
+  `clipboard_test` (tekst i pliki w obie strony) w trybie aplikacji i usługi.
+- **Eksplorator** (`pd_files.py`): `ExplorerPane` (drzewo + lista), `FileManager`, przeciąganie między panelami,
+  `enable_file_drop` (tkinterdnd2/tkdnd, `--collect-all tkinterdnd2`; autotest sprawdza ładowanie tkdnd).
+  Upuszczenie na okno sesji → `dest=":desktop:"` → host zapisuje na pulpicie (`known_folder("desktop")`).
+  Upuszczanie z prawdziwego Eksploratora nie jest testowane automatycznie (symulacja XDND na Linuksie daje pustą
+  listę także dla wzorcowego przykładu tkinterdnd2) – do potwierdzenia przez użytkownika.
+- `pd_common.user_home / known_folder` – agent (SYSTEM) używa profilu zalogowanego użytkownika (WTSQueryUserToken).
 
 ### 3.2 Łączenie przez internet (bez wspólnej sieci) – czeka na użytkownika
 Gotowe: `pd_relay.py` (serwer asyncio, bez zależności) + `scripts/install_relay.sh` (jedno polecenie:
