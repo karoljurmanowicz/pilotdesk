@@ -128,6 +128,11 @@ stan w `cfg["banner_minimized"]`. Celowo nie da się go ukryć całkiem (bezpiec
 - **Schowek**: `pd_clipfiles.set_files` – `OpenClipboard(NULL)` + `EmptyClipboard` powodowało ciche niepowodzenie
   `SetClipboardData` (pliki nigdy nie trafiały do schowka). Teraz niewidoczne okno-właściciel na wątek. Test CI
   `clipboard_test` (tekst i pliki w obie strony) w trybie aplikacji i usługi.
+  **Tryb usługi**: agent (SYSTEM) widzi w schowku użytkownika tylko numer formatu CF_HDROP bez danych
+  (GetClipboardData → 1168, licznik zmian = 0, formaty zarejestrowane niewidoczne). Dlatego `ClipboardSync(
+  watch_files=False)` w agencie, a pliki zgłasza okno programu: `ServiceHostProxy._clip_watch` → op `clip_files`
+  → `ClipboardSync.external_files`. Bez uruchomionego okna PilotDesk pliki z komputera z usługą nie są wysyłane
+  (tekst działa zawsze).
 - **Eksplorator** (`pd_files.py`): `ExplorerPane` (drzewo + lista), `FileManager`, przeciąganie między panelami,
   `enable_file_drop` (tkinterdnd2/tkdnd, `--collect-all tkinterdnd2`; autotest sprawdza ładowanie tkdnd).
   Upuszczenie na okno sesji → `dest=":desktop:"` → host zapisuje na pulpicie (`known_folder("desktop")`).

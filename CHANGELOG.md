@@ -5,7 +5,7 @@
 - Ostrzejsze powiększanie na dużych monitorach (np. obraz 1080p na monitorze 4K): powiększenie 2× bez rozmycia, lepsze filtry przy innych skalach.
 - Nowe menu „Skala obrazu” w oknie sesji: Dopasuj do okna, Ostre piksele, 100%, 150%, 200%.
 - Zmiana rozdzielczości komputera zdalnego (Windows) z menu „Skala obrazu” – po rozłączeniu wraca oryginalna.
-- Naprawione: pliki skopiowane Ctrl+C na jednym komputerze nie dawały się wkleić Ctrl+V na drugim (Windows odrzucał je ze schowka). Kopiowanie tekstu i plików sprawdzone automatycznie w obie strony, także w trybie usługi.
+- Naprawione: pliki skopiowane Ctrl+C na jednym komputerze nie dawały się wkleić Ctrl+V na drugim (Windows odrzucał je ze schowka). W trybie usługi pliki skopiowane na sterowanym komputerze przekazuje teraz okno PilotDesk (Windows nie pokazuje ich usłudze systemowej). Kopiowanie tekstu i plików sprawdzone automatycznie w obie strony – w zwykłym trybie i w trybie usługi.
 - Nowy menedżer plików w stylu Eksploratora Windows: drzewo folderów („Ten komputer”, Pulpit, Dokumenty, Pobrane, dyski), kolumny Nazwa / Data modyfikacji / Typ / Rozmiar, sortowanie, menu pod prawym przyciskiem, skróty F2, F5, Delete, Backspace.
 - Przeciąganie plików (drag & drop): między panelami menedżera plików, z Eksploratora Windows na panel komputera zdalnego, a także bezpośrednio na okno sesji – pliki trafiają wtedy na pulpit komputera zdalnego.
 - W trybie usługi Pulpit i Pobrane wskazują foldery zalogowanego użytkownika (wcześniej folder systemowy).
