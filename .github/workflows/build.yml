@@ -37,6 +37,7 @@ jobs:
         shell: bash
         timeout-minutes: 5
         run: |
+          set +e
           ./dist/PilotDesk.exe --selftest selftest.json; code=$?
           cat selftest.json
           echo "kod wyjścia: $code"

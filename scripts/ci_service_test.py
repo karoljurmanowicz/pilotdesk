@@ -115,6 +115,16 @@ def main():
             results["discovery"] = f"błąd: {e}"
             print(results["discovery"])
 
+        section("wspólny schowek w trybie usługi (agent jako SYSTEM)")
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from ci_app_test import clipboard_test
+            results["schowek_usluga"] = clipboard_test("127.0.0.1", 47800, password=PW)
+        except Exception as e:
+            import traceback
+            results["schowek_usluga"] = {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-1500:]}
+        print(json.dumps(results["schowek_usluga"], ensure_ascii=False, indent=1))
+
         section("ponowna instalacja – stary agent musi zniknąć")
         print("agenci przed:", agents())
         r = subprocess.run([EXE, "--install-service", cfgp], timeout=180)
@@ -164,7 +174,8 @@ def main():
     s2 = results.get("session_after_reinstall") or {}
     ok = (results.get("install_rc") == 0 and port_ok and s.get("auth") and s.get("frame") and s2.get("frame")
           and len(results.get("agents_after_reinstall", [])) <= 2  # opakowanie onefile + właściwy agent
-          and not results.get("agents_after_uninstall"))
+          and not results.get("agents_after_uninstall")
+          and all(v is True for v in (results.get("schowek_usluga") or {"x": False}).values()))
     print("OK" if ok else "BŁĄD")
     return 0 if ok else 1
 

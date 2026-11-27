@@ -917,6 +917,9 @@ class HostSession:
                     base = CF.ClipboardSync.clip_dir(m["clip"])
                 else:
                     dest = m.get("dest")
+                    if dest == ":desktop:":  # pliki upuszczone na okno sesji – na pulpit użytkownika
+                        from pd_common import known_folder
+                        dest = known_folder("desktop")
                     base = dest if dest and os.path.isdir(dest) else downloads_dir()
                 try:
                     self.files.begin(m, base)["clip"] = m.get("clip")

@@ -313,6 +313,7 @@ class SessionView(ctk.CTkFrame):
         c.bind("<ButtonRelease>", lambda e: self.on_button(e, False))
         c.bind("<MouseWheel>", self.on_wheel)
         c.bind("<Shift-MouseWheel>", lambda e: self.on_wheel(e, horizontal=True))
+        enable_file_drop(c, self._files_dropped)  # pliki przeciągnięte z Eksploratora → pulpit komputera zdalnego
 
     def set_chrome(self, show):
         if show:
@@ -895,6 +896,18 @@ class SessionView(ctk.CTkFrame):
         self.save_dirs[r] = local_dir
         self.send_json({"t": "get", "req": r, "path": remote_path})
 
+    def _files_dropped(self, paths, _x, _y):
+        paths = [p for p in paths if os.path.exists(p)]
+        if not paths:
+            return
+        if not self.ch or self.reconnecting:
+            self.toast("Brak połączenia – nie można wysłać plików.", "warn")
+            return
+        self.upload(paths, dest=":desktop:")
+        n = len(paths)
+        what = os.path.basename(paths[0].rstrip("\\/")) if n == 1 else f"{n} elementów"
+        self.toast(f"Wysyłam {what} na pulpit komputera {self.remote_name}…", "ok", 4000)
+
     def send_files_dialog(self):
         paths = filedialog.askopenfilenames(parent=self.win, title="Wybierz pliki do wysłania")
         if paths:
@@ -1241,244 +1254,6 @@ class ConnectedBanner(ctk.CTkToplevel):
 
 # =========================================================================== menedżer plików
 
-def _tree_style(widget):
-    st = ttk.Style(widget)
-    try:
-        st.theme_use("clam")
-    except tk.TclError:
-        pass
-    d = U.dark()
-    bg = "#111114" if d else "#FFFFFF"
-    fg = "#EDEDF0" if d else "#09090B"
-    head = "#111114" if d else "#FFFFFF"
-    muted = "#6B6B75" if d else "#8A8A93"
-    sel = "#232328" if d else "#EBEBEE"
-    st.configure("PD.Treeview", background=bg, fieldbackground=bg, foreground=fg, rowheight=28, borderwidth=0,
-                 font=(T.SANS, 10))
-    st.configure("PD.Treeview.Heading", background=head, foreground=muted, relief="flat", borderwidth=0,
-                 font=(T.MONO, 9), padding=(8, 6))
-    st.map("PD.Treeview", background=[("selected", sel)], foreground=[("selected", fg)])
-    st.map("PD.Treeview.Heading", background=[("active", head)])
-    st.layout("PD.Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
+from pd_files import FileManager, enable_file_drop  # noqa: E402  (Eksplorator + przeciąganie plików)
 
 
-class FilePane(ctk.CTkFrame):
-    def __init__(self, master, title, on_open):
-        super().__init__(master, fg_color=T.SURFACE, corner_radius=12, border_width=1, border_color=T.BORDER)
-        self.on_open = on_open
-        self.path = ""
-        self.parent_path = ""
-        self.entries = {}
-        head = ctk.CTkFrame(self, fg_color="transparent")
-        head.pack(fill="x", padx=14, pady=(12, 6))
-        U.label(head, title.upper(), 11, color=T.TEXT_3, mono=True).pack(side="left")
-        nav = ctk.CTkFrame(self, fg_color="transparent")
-        nav.pack(fill="x", padx=10, pady=(0, 8))
-        U.icon_button(nav, "arrow_up", self.go_up, tip="Folder wyżej", width=30, height=30).pack(side="left")
-        U.icon_button(nav, "home", lambda: self.on_open(""), tip="Dyski i foldery", width=30, height=30).pack(side="left")
-        self.path_e = U.entry(nav, "", height=30, size=12, mono=True)
-        self.path_e.pack(side="left", fill="x", expand=True, padx=(4, 0))
-        self.path_e.bind("<Return>", lambda e: self.on_open(self.path_e.get()))
-        U.hairline(self, fill="x", padx=1)
-        holder = tk.Frame(self, bg=self._apply_appearance_mode(T.SURFACE))
-        holder.pack(fill="both", expand=True, padx=6, pady=(0, 8))
-        self.tree = ttk.Treeview(holder, columns=("size", "mtime"), selectmode="extended", style="PD.Treeview")
-        self.tree.heading("#0", text="NAZWA", anchor="w")
-        self.tree.heading("size", text="ROZMIAR", anchor="e")
-        self.tree.heading("mtime", text="ZMIENIONO", anchor="w")
-        self.tree.column("#0", width=250)
-        self.tree.column("size", width=80, anchor="e")
-        self.tree.column("mtime", width=125)
-        sb = ctk.CTkScrollbar(holder, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=sb.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-        self.tree.bind("<Double-1>", self._dbl)
-        self.tree.bind("<Return>", self._dbl)
-        self.tree.bind("<BackSpace>", lambda e: self.go_up())
-        c = "#A1A1AA" if U.dark() else "#52525B"
-        self.ic_dir = ImageTk.PhotoImage(T.icon_pil("folder", c, 16))
-        self.ic_file = ImageTk.PhotoImage(T.icon_pil("file", "#6B6B75", 16))
-
-    def show(self, result):
-        self.path = result.get("path", "")
-        self.parent_path = result.get("parent", "")
-        self.path_e.delete(0, "end")
-        self.path_e.insert(0, self.path or "dyski i foldery")
-        self.tree.delete(*self.tree.get_children())
-        self.entries = {}
-        if result.get("error"):
-            self.tree.insert("", "end", text="  " + result["error"])
-        for e in result.get("entries", []):
-            mt = time.strftime("%Y-%m-%d %H:%M", time.localtime(e["mtime"])) if e.get("mtime") else ""
-            iid = self.tree.insert("", "end", text="  " + e["name"], image=self.ic_dir if e["dir"] else self.ic_file,
-                                   values=("" if e["dir"] else human_size(e["size"]), mt))
-            self.entries[iid] = e
-
-    def _dbl(self, _e=None):
-        sel = self.tree.selection()
-        if sel and sel[0] in self.entries and self.entries[sel[0]]["dir"]:
-            self.on_open(self.entries[sel[0]]["path"])
-
-    def go_up(self):
-        self.on_open(self.parent_path if self.path else "")
-
-    def selected(self):
-        return [self.entries[i] for i in self.tree.selection() if i in self.entries]
-
-
-class FileManager(ctk.CTkToplevel):
-    def __init__(self, sess):
-        super().__init__(sess.win)
-        self.sess = sess
-        self.title(f"Pliki – {sess.remote_name}")
-        self.geometry("1200x760")
-        self.minsize(900, 560)
-        self.configure(fg_color=T.BG)
-        T.apply_window_icon(self)
-        T.apply_dark_title_bar(self, U.dark())
-        _tree_style(self)
-        body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=16, pady=(16, 8))
-        body.grid_columnconfigure(0, weight=1)
-        body.grid_columnconfigure(2, weight=1)
-        body.grid_rowconfigure(0, weight=1)
-        self.local = FilePane(body, "ten komputer", self.local_open)
-        self.local.grid(row=0, column=0, sticky="nsew")
-        mid = ctk.CTkFrame(body, fg_color="transparent", width=130)
-        mid.grid(row=0, column=1, sticky="ns", padx=12)
-        b = U.primary_button(mid, "Wyślij", self.do_upload, icon="arrow_right", width=132)
-        b.configure(compound="right")
-        b.pack(pady=(90, 8))
-        U.primary_button(mid, "Pobierz", self.do_download, icon="arrow_left", width=132).pack(pady=0)
-        U.hairline(mid, fill="x", pady=18)
-        for text, cmd, ic in (("Nowy folder", self.do_mkdir, "plus"), ("Zmień nazwę", self.do_rename, "edit"),
-                              ("Odśwież", self.refresh_both, "refresh")):
-            U.secondary_button(mid, text, cmd, icon=ic, width=132).pack(pady=3)
-        U.danger_button(mid, "Usuń", self.do_delete, icon="trash", width=132).pack(pady=3)
-        self.remote = FilePane(body, sess.remote_name, self.remote_open)
-        self.remote.grid(row=0, column=2, sticky="nsew")
-        U.section(self, "transfery", padx=16, pady=(6, 4))
-        self.xlist = ctk.CTkScrollableFrame(self, fg_color="transparent", height=84)
-        self.xlist.pack(fill="x", padx=12, pady=(0, 12))
-        self.xempty = U.label(self.xlist, "Brak transferów. Zaznacz pliki i kliknij „Wyślij” lub „Pobierz”.", 12, color=T.TEXT_3)
-        self.xempty.pack(anchor="w", padx=6, pady=4)
-        self.xrows = {}
-        for tid, t in sess.transfers.items():
-            self.show_transfer(tid, t)
-        self._refresh_pending = False
-        self.local_open(os.path.expanduser("~"))
-        self.remote_open("")
-
-    def show_transfer(self, tid, t):
-        if not self.winfo_exists():
-            return
-        if self.xempty:
-            self.xempty.destroy()
-            self.xempty = None
-        row = self.xrows.get(tid)
-        if not row:
-            first = next((w for w in self.xlist.winfo_children() if w.winfo_manager()), None)
-            row = ctk.CTkFrame(self.xlist, fg_color="transparent")
-            row.pack(fill="x", pady=1, **({"before": first} if first is not None else {}))
-            U.label(row, "↑" if t["dir"] == "up" else "↓", 12, color=T.TEXT_3, mono=True, width=16).pack(side="left", padx=(6, 6))
-            row.name = U.label(row, os.path.basename(t["name"])[:44], 12, width=300, anchor="w")
-            row.name.pack(side="left")
-            row.bar = ctk.CTkProgressBar(row, width=180, height=4, progress_color=T.TEXT_2, fg_color=T.SURFACE_3)
-            row.bar.pack(side="left", padx=10)
-            row.info = U.label(row, "", 11, color=T.TEXT_3, anchor="w", mono=True)
-            row.info.pack(side="left", fill="x", expand=True)
-            self.xrows[tid] = row
-        pct = t["done"] / t["size"] if t["size"] else 1.0
-        row.bar.set(pct)
-        st = t["status"]
-        done = st.startswith("zapisano") or st == "wysłano"
-        row.bar.configure(progress_color=T.GREEN if done else (T.RED if st.startswith("błąd") else T.TEXT_2))
-        text = f"{pct * 100:.0f}%  {human_size(t['done'])} / {human_size(t['size'])}" if st == "trwa" else st
-        row.info.configure(text=text[:90], text_color=T.RED if st.startswith("błąd") else T.TEXT_3)
-
-    def local_open(self, path):
-        try:
-            r = list_dir(path)
-        except Exception as e:
-            r = {"path": path, "parent": os.path.dirname(path), "entries": [], "error": str(e)}
-        self.local.show(r)
-
-    def local_refresh(self):
-        if self.winfo_exists():
-            self.local_open(self.local.path)
-
-    def remote_open(self, path):
-        self.sess.request_ls(path, lambda r: self.winfo_exists() and self.remote.show(r))
-
-    def remote_refresh_soon(self):
-        if not self._refresh_pending:
-            self._refresh_pending = True
-
-            def go():
-                self._refresh_pending = False
-                if self.winfo_exists():
-                    self.remote_open(self.remote.path)
-            self.after(700, go)
-
-    def refresh_both(self):
-        self.local_refresh()
-        self.remote_open(self.remote.path)
-
-    def _toast(self, t, kind="warn"):
-        U.Toast(self, t, kind)
-
-    def do_upload(self):
-        sel = self.local.selected()
-        if not sel:
-            self._toast("Zaznacz pliki lub foldery po lewej stronie.")
-        elif not self.remote.path:
-            self._toast("Po prawej wejdź najpierw do folderu docelowego.")
-        else:
-            self.sess.upload([e["path"] for e in sel], dest=self.remote.path)
-
-    def do_download(self):
-        sel = self.remote.selected()
-        if not sel:
-            self._toast("Zaznacz pliki lub foldery po prawej stronie.")
-        elif not self.local.path:
-            self._toast("Po lewej wejdź najpierw do folderu docelowego.")
-        else:
-            for e in sel:
-                self.sess.download(e["path"], self.local.path)
-
-    def _op_done(self, r):
-        if not r.get("ok"):
-            self._toast(r.get("error", "Błąd"), "error")
-        self.remote_open(self.remote.path)
-
-    def _join_remote(self, name):
-        base = self.remote.path
-        sep = "\\" if ("\\" in base or (len(base) >= 2 and base[1] == ":")) else "/"
-        return base.rstrip("\\/") + sep + name
-
-    def do_mkdir(self):
-        if not self.remote.path:
-            return
-        name = U.ask_string(self, "Nowy folder", "Nazwa folderu na komputerze zdalnym:", icon="folder")
-        if name:
-            self.sess.request_op("mkdir", self._op_done, path=self._join_remote(name))
-
-    def do_rename(self):
-        sel = self.remote.selected()
-        if len(sel) != 1:
-            self._toast("Zaznacz jeden element po prawej stronie.")
-            return
-        name = U.ask_string(self, "Zmień nazwę", "Nowa nazwa:", sel[0]["name"])
-        if name and name != sel[0]["name"]:
-            self.sess.request_op("rename", self._op_done, path=sel[0]["path"], new=self._join_remote(name))
-
-    def do_delete(self):
-        sel = self.remote.selected()
-        if not sel:
-            return
-        names = ", ".join(e["name"] for e in sel[:5]) + (" …" if len(sel) > 5 else "")
-        if U.confirm(self, "Usunąć na komputerze zdalnym?", f"{names}\nPliki zostaną usunięte trwale (bez kosza).",
-                     "Usuń", danger=True, icon="trash"):
-            for e in sel:
-                self.sess.request_op("delete", self._op_done, path=e["path"])

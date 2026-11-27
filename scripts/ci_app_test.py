@@ -71,7 +71,7 @@ def wait_for(cond, secs):
     return False
 
 
-def clipboard_test(ip, port):
+def clipboard_test(ip, port, password=None):
     """Wspólny schowek na prawdziwym Windows: tekst i pliki w obie strony (ten proces = „drugi komputer”)."""
     import secrets
     import tempfile
@@ -81,8 +81,11 @@ def clipboard_test(ip, port):
     from pd_common import M_FILE, send_file
     s = socket.create_connection((ip, port), timeout=10)
     s.settimeout(60)
-    ch, _hello, _ok, _ = viewer_handshake(s, None, {"client": "ci-schowek", "video": False,
-                                                    "caps": {"clipfiles": True}}, mode="ask")
+    from pd_common import derive_password_key
+    kp = (lambda salt: derive_password_key(password, salt)) if password else None
+    ch, _hello, _ok, _ = viewer_handshake(s, kp, {"client": "ci-schowek", "video": False,
+                                                  "caps": {"clipfiles": True}},
+                                          mode="password" if password else "ask")
     msgs = []
 
     def reader():
