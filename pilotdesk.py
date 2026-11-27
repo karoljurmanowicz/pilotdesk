@@ -1988,6 +1988,11 @@ def run_gui(cfg, minimized):
         else:
             return
     root = ctk.CTk()
+    try:  # przeciąganie plików (OLE) – przed czymkolwiek, co ustawia COM w wątku okna (soundcard)
+        import pd_files
+        pd_files.preload(root)
+    except Exception:
+        pass
     App(root, cfg, ext_queue=ext, minimized=minimized, instance=si)
     root.mainloop()
 

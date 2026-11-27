@@ -45,6 +45,12 @@ def write_error(tb):
 def selftest(out):
     """Ładuje wszystkie moduły i sprawdza najważniejsze możliwości. Zapisuje raport JSON."""
     report = {"ok": True, "modules": {}, "python": sys.version}
+    if sys.platform == "win32":  # tak jak w programie: przeciąganie plików ładowane przed bibliotekami dźwięku
+        try:
+            report["tkdnd_start"] = _tkdnd_check(preload=True)
+        except Exception as e:
+            report["tkdnd_start"] = f"BŁĄD: {e!r}"
+        report["ok"] &= str(report["tkdnd_start"]).startswith("ok")
     mods = ["pd_common", "pd_install", "pd_theme", "pd_ui", "pd_host", "pd_viewer", "pd_media", "pd_clipfiles",
             "pd_winutil", "pd_update", "pd_service", "pd_kvm", "pd_discovery", "pd_net", "pd_log", "pd_diag", "truststore", "certifi", "customtkinter", "mss", "numpy", "PIL.ImageTk", "pynput",
             "pyperclip", "cryptography", "av"]
@@ -88,7 +94,7 @@ def selftest(out):
         try:
             report["mouse_inject"] = mouse_selftest()
             report["ok"] &= report["mouse_inject"].get("struct_ok", False)
-            report["ok"] &= str(report["mouse_inject"].get("tkdnd", "")).startswith("ok")
+            report["mouse_inject"]["tkdnd_after_audio"] = report["mouse_inject"].pop("tkdnd", None)
         except Exception:
             report["mouse_inject"] = {"error": traceback.format_exc()}
             report["ok"] = False
@@ -141,19 +147,21 @@ def mouse_selftest():
     except Exception as e:
         r["display_error"] = repr(e)
         r["struct_ok"] = False
-    try:
-        import tkinterdnd2  # noqa – przeciąganie plików z Eksploratora
+    try:  # po zaimportowaniu soundcard – wątek okna jest już w STA, więc tkdnd musi się dalej ładować
         r["tkdnd"] = _tkdnd_check()
     except Exception as e:
         r["tkdnd"] = f"BŁĄD: {e!r}"
     return r
 
 
-def _tkdnd_check():
+def _tkdnd_check(preload=False):
     import tkinter as tk
     import pd_files
     root = tk.Tk()
     try:
+        pd_files._dnd_loaded["ok"] = None  # nowy interpreter Tcl – ładujemy od nowa
+        if preload:
+            pd_files.preload(root)
         f = tk.Frame(root)
         f.pack()
         if pd_files.enable_file_drop(f, lambda *a: None):

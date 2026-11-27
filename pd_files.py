@@ -72,6 +72,35 @@ def _load_tkdnd(root):
 
 # --------------------------------------------------------------------------- przeciąganie z Eksploratora
 
+def _keep_mta():
+    """Wątek trzymający „wielowątkowy apartament” COM (MTA). Biblioteka dźwięku (soundcard) potrzebuje MTA w swoich
+    wątkach; wątek okna musi za to być w trybie STA, inaczej Windows nie pozwala przeciągać plików (OLE)."""
+    import threading
+    import ctypes
+
+    def run():
+        try:
+            ctypes.WinDLL("ole32").CoInitializeEx(None, 0)  # COINIT_MULTITHREADED
+        except Exception:
+            return
+        threading.Event().wait()
+    threading.Thread(target=run, name="com-mta", daemon=True).start()
+
+
+def preload(root):
+    """Wołać raz, zaraz po utworzeniu okna i ZANIM cokolwiek zaimportuje soundcard (CoInitializeEx MTA w wątku
+    okna uniemożliwiało OleInitialize: „unable to initialize OLE2”)."""
+    if sys.platform == "win32":
+        _keep_mta()
+    if _dnd_loaded["ok"] is None:
+        try:
+            _dnd_loaded["ok"] = _load_tkdnd(root)
+        except Exception as e:
+            TKDND_ERROR["msg"] = repr(e)
+            _dnd_loaded["ok"] = False
+    return _dnd_loaded["ok"]
+
+
 def enable_file_drop(widget, on_drop):
     """Pozwala upuścić na `widget` pliki przeciągnięte z Eksploratora Windows (biblioteka tkdnd).
     on_drop(lista_ścieżek, x_ekranu, y_ekranu) – wołane w wątku okna. Zwraca False, gdy tkdnd niedostępne."""

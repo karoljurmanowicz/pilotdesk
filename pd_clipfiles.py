@@ -90,8 +90,7 @@ if sys.platform == "win32":
         return int(_u.GetClipboardSequenceNumber())
 
     def get_files():
-        if not _u.IsClipboardFormatAvailable(CF_HDROP):
-            return None
+        # bez IsClipboardFormatAvailable: w procesie SYSTEM (agent usługi) zwraca fałsz, choć schowek da się otworzyć
         if not _open():
             return None
         try:
