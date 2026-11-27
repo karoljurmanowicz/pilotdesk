@@ -182,6 +182,14 @@ else:
         return True
 
 
+def _log(msg):
+    try:
+        import pd_log
+        pd_log.info("Schowek: %s", msg)
+    except Exception:
+        pass
+
+
 def total_size(paths):
     n = 0
     for p in paths:
@@ -272,6 +280,11 @@ class ClipboardSync:
         except Exception:
             self.text_last = None
         seq = sequence() if self.files_enabled else None
+        # Licznik zmian schowka bywa niedostępny (0) w procesie SYSTEM (agent usługi) – wtedy sprawdzamy listę
+        # plików wprost, co ~1 s. Inaczej pliki skopiowane na komputerze z usługą nigdy nie były wysyłane.
+        poll_files = self.files_enabled and not seq
+        last_poll = 0.0
+        _log(f"start (pliki: {self.files_enabled}, licznik zmian: {seq})")
         while self.running:
             if self.pre_op:
                 try:
@@ -290,8 +303,8 @@ class ClipboardSync:
                             self.files_applied = tuple(val)
                             self.notice(f"Pliki ze schowka gotowe ({len(val)}) – wklej je Ctrl+V")
                     applied = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log(f"nie udało się ustawić schowka ({kind}): {e!r}")
             if applied and self.files_enabled:
                 time.sleep(0.15)
                 seq = sequence()
@@ -301,15 +314,20 @@ class ClipboardSync:
             if self.files_enabled:
                 try:
                     s = sequence()
-                    if s != seq:
+                    changed = s != seq
+                    if not changed and poll_files and time.time() - last_poll > 1.0:
+                        last_poll = time.time()
+                        changed = True
+                    if changed:
                         seq = s
                         files = get_files()
                         if files and tuple(files) != self.files_applied:
                             self.files_applied = tuple(files)
+                            _log(f"wysyłam pliki ze schowka: {len(files)}")
                             self._send_files(files)
                             continue
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log(f"błąd odczytu plików ze schowka: {e!r}")
             try:
                 txt = self._paste()
             except Exception:
@@ -342,6 +360,6 @@ class ClipboardSync:
                         self.send_file_fn(full, rel, {"clip": cid}, cancel)
                 if not cancel.is_set():
                     self.send_json({"t": "clip_files_end", "id": cid, "names": names})
-            except Exception:
-                pass
+            except Exception as e:
+                _log(f"błąd wysyłania plików ze schowka: {e!r}")
         self._threading.Thread(target=work, daemon=True).start()

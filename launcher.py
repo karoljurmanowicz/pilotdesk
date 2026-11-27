@@ -151,14 +151,14 @@ def mouse_selftest():
 
 def _tkdnd_check():
     import tkinter as tk
-    from tkinterdnd2 import TkinterDnD
+    import pd_files
     root = tk.Tk()
     try:
-        v = TkinterDnD._require(root)
         f = tk.Frame(root)
         f.pack()
-        root.tk.call("tkdnd::drop_target", "register", f._w, "DND_Files")
-        return f"ok {v}"
+        if pd_files.enable_file_drop(f, lambda *a: None):
+            return "ok " + str(root.tk.call("package", "present", "tkdnd"))
+        return "BŁĄD: " + str(pd_files.TKDND_ERROR.get("msg"))
     finally:
         root.destroy()
 

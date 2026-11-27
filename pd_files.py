@@ -20,6 +20,54 @@ from pd_common import human_size, list_dir
 
 ROOT = ""  # ścieżka „Ten komputer”
 _dnd_loaded = {"ok": None}
+TKDND_ERROR = {"msg": None}
+
+
+def _load_tkdnd(root):
+    """Ładuje rozszerzenie tkdnd (z pakietu tkinterdnd2) do interpretera Tcl okna. Zapisuje dokładny powód
+    niepowodzenia (w zbudowanym PilotDesk.exe ścieżki są inne niż w Pythonie)."""
+    import platform
+    try:
+        import tkinterdnd2
+        base = os.path.join(os.path.dirname(os.path.abspath(tkinterdnd2.__file__)), "tkdnd")
+    except Exception as e:
+        TKDND_ERROR["msg"] = f"brak tkinterdnd2: {e!r}"
+        return False
+    mach = platform.machine().lower()
+    if sys.platform == "win32":
+        arch = os.environ.get("PROCESSOR_ARCHITECTURE", mach).upper()
+        rep = {"ARM64": "win-arm64", "X86": "win-x86"}.get(arch, "win-x64")
+    elif sys.platform == "darwin":
+        rep = "osx-arm64" if mach == "arm64" else "osx-x64"
+    else:
+        rep = "linux-arm64" if mach in ("aarch64", "arm64") else "linux-x64"
+    try:
+        tcl9 = int(str(root.tk.call("info", "tclversion")).split(".")[0]) >= 9
+    except Exception:
+        tcl9 = False
+    cands = ([os.path.join(base, rep + "-tcl9")] if tcl9 else []) + [os.path.join(base, rep)]
+    errs = []
+    for d in cands:
+        if not os.path.isdir(d):
+            errs.append(f"brak folderu {d}")
+            continue
+        try:
+            root.tk.call("lappend", "auto_path", d.replace("\\", "/"))
+            root.tk.call("package", "require", "tkdnd")
+            return True
+        except tk.TclError as e:
+            try:
+                files = ", ".join(sorted(os.listdir(d)))
+            except OSError:
+                files = "?"
+            errs.append(f"{d}: {e} [pliki: {files[:300]}]")
+    TKDND_ERROR["msg"] = "; ".join(errs)
+    try:
+        import pd_log
+        pd_log.info("Przeciąganie plików niedostępne: %s", TKDND_ERROR["msg"])
+    except Exception:
+        pass
+    return False
 
 
 # --------------------------------------------------------------------------- przeciąganie z Eksploratora
@@ -29,10 +77,9 @@ def enable_file_drop(widget, on_drop):
     on_drop(lista_ścieżek, x_ekranu, y_ekranu) – wołane w wątku okna. Zwraca False, gdy tkdnd niedostępne."""
     if _dnd_loaded["ok"] is None:
         try:
-            from tkinterdnd2 import TkinterDnD
-            TkinterDnD._require(widget.winfo_toplevel())
-            _dnd_loaded["ok"] = True
-        except Exception:
+            _dnd_loaded["ok"] = _load_tkdnd(widget)
+        except Exception as e:
+            TKDND_ERROR["msg"] = repr(e)
             _dnd_loaded["ok"] = False
     if not _dnd_loaded["ok"]:
         return False
