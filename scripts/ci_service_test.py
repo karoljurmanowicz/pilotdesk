@@ -116,6 +116,13 @@ def main():
             print(results["discovery"])
 
         section("wspólny schowek w trybie usługi (agent jako SYSTEM)")
+        # okno programu w trybie usługi (jak u użytkownika) – to ono widzi pliki w schowku i zgłasza je agentowi
+        import shutil
+        gui_dir = os.path.join(os.environ["LOCALAPPDATA"], "Programs", "PilotDesk")
+        os.makedirs(gui_dir, exist_ok=True)
+        shutil.copy2(EXE, os.path.join(gui_dir, "PilotDesk.exe"))
+        gui = subprocess.Popen([os.path.join(gui_dir, "PilotDesk.exe")])
+        time.sleep(12)
         try:
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             from ci_app_test import clipboard_test
@@ -124,6 +131,7 @@ def main():
             import traceback
             results["schowek_usluga"] = {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-1500:]}
         print(json.dumps(results["schowek_usluga"], ensure_ascii=False, indent=1))
+        gui.kill()
 
         section("ponowna instalacja – stary agent musi zniknąć")
         print("agenci przed:", agents())

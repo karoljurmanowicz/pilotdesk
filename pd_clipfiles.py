@@ -274,7 +274,7 @@ class ClipboardSync:
     MAX_BYTES = 4 * 1024 ** 3
 
     def __init__(self, send_json, send_file_fn, enabled=lambda: True, notice=None, progress=None,
-                 files_enabled=True, pre_op=None):
+                 files_enabled=True, pre_op=None, watch_files=True):
         import queue
         import threading
         self.send_json = send_json
@@ -284,6 +284,9 @@ class ClipboardSync:
         self.progress = progress
         self.files_enabled = files_enabled and available()
         self.pre_op = pre_op
+        # watch_files=False: proces SYSTEM (agent usługi) – Windows nie oddaje mu listy plików ze schowka; pliki
+        # skopiowane przez użytkownika zgłasza okno PilotDesk (external_files), a agent tylko je wysyła.
+        self.watch_files = watch_files
         self.q = queue.Queue()
         self.running = False
         self.text_last = None
@@ -316,6 +319,14 @@ class ClipboardSync:
         if paths:
             self.q.put(("files", paths))
 
+    def external_files(self, paths):
+        """Pliki skopiowane przez użytkownika, zgłoszone przez okno PilotDesk (tryb usługi)."""
+        paths = [p for p in paths if isinstance(p, str) and os.path.exists(p)]
+        if paths and self.files_enabled and self.enabled() and tuple(paths) != self.files_applied:
+            self.files_applied = tuple(paths)
+            _log(f"pliki ze schowka użytkownika (przez okno programu): {len(paths)}")
+            self._send_files(paths)
+
     # --- wątek
     def _paste(self):
         import pyperclip
@@ -337,7 +348,7 @@ class ClipboardSync:
         seq = sequence() if self.files_enabled else None
         # Licznik zmian schowka bywa niedostępny (0) w procesie SYSTEM (agent usługi) – wtedy sprawdzamy listę
         # plików wprost, co ~1 s. Inaczej pliki skopiowane na komputerze z usługą nigdy nie były wysyłane.
-        poll_files = self.files_enabled and not seq
+        poll_files = self.files_enabled and not seq and self.watch_files
         last_poll = 0.0
         _log(f"start (pliki: {self.files_enabled}, licznik zmian: {seq})")
         while self.running:
@@ -366,7 +377,7 @@ class ClipboardSync:
             time.sleep(0.4)
             if not self.enabled():
                 continue
-            if self.files_enabled:
+            if self.files_enabled and self.watch_files:
                 try:
                     s = sequence()
                     changed = s != seq

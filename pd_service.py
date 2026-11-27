@@ -434,6 +434,10 @@ class ControlServer:
                             s.stop()
                 elif op == "chat" and m.get("sid") in sess:
                     sess[m["sid"]].send_chat(m.get("text", ""))
+                elif op == "clip_files":  # pliki skopiowane przez użytkownika (okno widzi schowek, SYSTEM nie)
+                    for s in sess.values():
+                        if getattr(s, "clip", None):
+                            s.clip.external_files(m.get("paths") or [])
                 elif op == "update":
                     threading.Thread(target=lambda: _safe(service_update_check, True), daemon=True).start()
                 elif op == "answer":
@@ -594,6 +598,7 @@ class ServiceHostProxy:
         self._update_asked = False
         self.connected = False  # czy agent usługi odpowiada (okno pokazuje prawdziwy stan, nie „Gotowy” na ślepo)
         threading.Thread(target=self._loop, daemon=True).start()
+        threading.Thread(target=self._clip_watch, name="clip-watch", daemon=True).start()
 
     def start(self):
         pass
@@ -639,6 +644,34 @@ class ServiceHostProxy:
             self.direct_status = "usługa nie odpowiada – ponawiam"
             self.on_status()
             time.sleep(3)
+
+    def _clip_watch(self):
+        """Tryb usługi: Windows nie pokazuje agentowi (SYSTEM) plików ze schowka użytkownika – okno programu
+        sprawdza schowek i przekazuje listę plików agentowi, a ten wysyła je do połączonych komputerów."""
+        try:
+            import pd_clipfiles as CF
+        except Exception:
+            return
+        if not CF.available():
+            return
+        seq = None
+        last = None
+        while self.running:
+            time.sleep(0.5)
+            if not (self.sessions and self.f):
+                last = None
+                continue
+            try:
+                s = CF.sequence()
+                if s == seq:
+                    continue
+                seq = s
+                files = CF.get_files()
+                if files and tuple(files) != last:
+                    last = tuple(files)
+                    self.send({"op": "clip_files", "paths": list(files)})
+            except Exception:
+                pass
 
     def _event(self, m):
         ev = m.get("ev")

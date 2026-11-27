@@ -473,7 +473,7 @@ class HostSession:
             import pyperclip  # noqa
             self.clip = CF.ClipboardSync(
                 self.send_json, lambda full, rel, extra, cancel: send_file(self.ch, full, rel, extra=extra, cancel=cancel),
-                files_enabled=bool(self.vcaps.get("clipfiles")))
+                files_enabled=bool(self.vcaps.get("clipfiles")), watch_files=not self.svc.agent_mode)
             self.clip.start()
         except Exception as e:
             self.svc.log(f"Schowek niedostępny: {e}")
