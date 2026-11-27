@@ -89,14 +89,25 @@ if sys.platform == "win32":
     def sequence():
         return int(_u.GetClipboardSequenceNumber())
 
+    _diag = {}
+
+    def _note(key, msg):
+        if _diag.get(key) != msg:  # każdy stan zapisujemy raz – bez zalewania dziennika
+            _diag[key] = msg
+            _log(msg)
+
     def get_files():
         # bez IsClipboardFormatAvailable: w procesie SYSTEM (agent usługi) zwraca fałsz, choć schowek da się otworzyć
         if not _open():
+            _note("open", f"nie można otworzyć schowka (błąd {ctypes.get_last_error()}, okno {_owner()})")
             return None
+        _note("open", "schowek otwarty")
         try:
             h = _u.GetClipboardData(CF_HDROP)
             if not h:
+                _note("hdrop", f"brak plików w schowku (błąd {ctypes.get_last_error()})")
                 return None
+            _note("hdrop", "są pliki w schowku")
             n = _s.DragQueryFileW(h, 0xFFFFFFFF, None, 0)
             out = []
             for i in range(n):
@@ -320,6 +331,10 @@ class ClipboardSync:
                     if changed:
                         seq = s
                         files = get_files()
+                        if files and tuple(files) == self.files_applied:
+                            pass
+                        elif files:
+                            _log(f"nowe pliki w schowku: {len(files)}")
                         if files and tuple(files) != self.files_applied:
                             self.files_applied = tuple(files)
                             _log(f"wysyłam pliki ze schowka: {len(files)}")
