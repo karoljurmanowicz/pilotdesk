@@ -303,6 +303,8 @@ def _draw(name, P):
         P.line((6.5, 6.5), (17.5, 17.5)); P.line((17.5, 6.5), (6.5, 17.5))
     elif name == "check":
         P.line((5, 12.5), (9.8, 17.3), (19, 7))
+    elif name == "minus":
+        P.line((6, 12), (18, 12))
     elif name == "chevron_down":
         P.line((7, 9.5), (12, 14.5), (17, 9.5))
     elif name == "arrow_up":

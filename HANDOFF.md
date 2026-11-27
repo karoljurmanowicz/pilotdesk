@@ -1,6 +1,6 @@
 # PilotDesk – przekazanie projektu (handoff)
 
-Stan na: 2026-11-26 · wersja **3.9** (wydawana przez CI) · repozytorium **github.com/karoljurmanowicz/pilotdesk** (publiczne)
+Stan na: 2026-11-26 · wersja **3.10** (wydawana przez CI) · repozytorium **github.com/karoljurmanowicz/pilotdesk** (publiczne)
 
 Ten plik jest dla osoby (lub kolejnej sesji Claude), która przejmuje prace. Najpierw przeczytaj
 **„Otwarte problemy”** – pierwszy z nich zgłosił użytkownik tuż przed przekazaniem.
@@ -110,6 +110,11 @@ zamknięte” = host zamknął gniazdo **przed wysłaniem hello**. Przyczyna nie
 - Potwierdzone UIPI: „Okno „PrintExp” działa jako administrator” – kliknięcia w programie drukarki wymagają usługi.
 - U użytkownika na PC 2 mogą wciąż działać stare osierocone agenty (3.6/3.7): po aktualizacji do 3.9 trzeba raz
   „Dostęp → Usługa systemowa → Odinstaluj” (czyści agentów), potem ewentualnie „Zainstaluj”.
+
+### 3.1f [3.10] Potwierdzone przez użytkownika: „działa wszystko”
+Po 3.9 połączenia, usługa i kliknięcia działają. Prośba: minimalizowanie okienka „Sesja zdalna aktywna”
+(`pd_viewer.ConnectedBanner`) – 3.10: przycisk „–” → karteczka „● Zdalnie” (klik = rozwiń, przeciąganie),
+stan w `cfg["banner_minimized"]`. Celowo nie da się go ukryć całkiem (bezpieczeństwo – widać, że ktoś steruje).
 
 ### 3.2 Łączenie przez internet (bez wspólnej sieci) – czeka na użytkownika
 Gotowe: `pd_relay.py` (serwer asyncio, bez zależności) + `scripts/install_relay.sh` (jedno polecenie:

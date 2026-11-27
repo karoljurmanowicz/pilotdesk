@@ -1,5 +1,8 @@
 # Co nowego w PilotDesk
 
+## 3.10
+- Okienko „Sesja zdalna aktywna” na sterowanym komputerze można zminimalizować (przycisk „–”) do małej karteczki „● Zdalnie” w rogu ekranu. Kliknięcie karteczki rozwija okienko, można ją też przeciągnąć. PilotDesk zapamiętuje wybór na kolejne sesje.
+
 ## 3.9
 - Naprawione: okno PilotDesk zawieszało się na stałe (najczęściej podczas wyszukiwania komputerów w sieci). Przyczyną było sprzątanie pamięci uruchamiane w wątku pobocznym – teraz odbywa się wyłącznie w wątku okna.
 - Naprawione: po ponownej instalacji lub aktualizacji usługi systemowej stary proces usługi działał dalej i odrzucał wszystkie połączenia („Połączenie zostało zamknięte”). Usługa zamyka teraz swoje stare procesy przy starcie, instalacji, aktualizacji i odinstalowaniu, a przestarzały proces sam się wyłącza.

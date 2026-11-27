@@ -1087,39 +1087,96 @@ class ChatWindow(ctk.CTkToplevel):
 # =========================================================================== baner na komputerze sterowanym
 
 class ConnectedBanner(ctk.CTkToplevel):
-    def __init__(self, master, on_disconnect, on_chat):
+    """Okienko „Sesja zdalna aktywna” na sterowanym komputerze. Można je zminimalizować do małej karteczki
+    „● Zdalnie” – coś zawsze zostaje widoczne, żeby było wiadomo, że ktoś jest połączony."""
+
+    W = 300
+
+    def __init__(self, master, on_disconnect, on_chat, minimized=False, on_toggle=None):
         super().__init__(master)
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         self.configure(fg_color=T.BORDER_STRONG)
-        f = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=0)
-        f.pack(fill="both", expand=True, padx=1, pady=1)
-        top = ctk.CTkFrame(f, fg_color="transparent")
-        top.pack(fill="x", padx=14, pady=(12, 2))
+        self.on_toggle = on_toggle
+        self.minimized = False
+        self._moved = False
+        self._dx = self._dy = 0
+
+        # --- pełny widok
+        self.full = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=0)
+        top = ctk.CTkFrame(self.full, fg_color="transparent")
+        top.pack(fill="x", padx=(14, 6), pady=(8, 0))
         U.dot(top, T.RED, 7).pack(side="left")
-        U.label(top, "Sesja zdalna aktywna", 13, "medium").pack(side="left", padx=6)
-        self.who = U.label(f, "", 12, color=T.TEXT_2, mono=True)
+        title = U.label(top, "Sesja zdalna aktywna", 13, "medium")
+        title.pack(side="left", padx=6)
+        U.icon_button(top, "minus", lambda: self.set_minimized(True), tip="Zminimalizuj", size=14, width=28,
+                      height=28).pack(side="right")
+        self.who = U.label(self.full, "", 12, color=T.TEXT_2, mono=True)
         self.who.pack(anchor="w", padx=14)
-        row = ctk.CTkFrame(f, fg_color="transparent")
+        row = ctk.CTkFrame(self.full, fg_color="transparent")
         row.pack(fill="x", padx=12, pady=(8, 12))
         U.secondary_button(row, "Czat", on_chat, height=28, width=70).pack(side="left")
         U.danger_button(row, "Rozłącz", on_disconnect, height=28, width=90).pack(side="right")
-        self._dx = self._dy = 0
-        for w in (f, top):
+        for w in (self.full, top, title, self.who):
             w.bind("<ButtonPress-1>", self._start)
             w.bind("<B1-Motion>", self._drag)
+
+        # --- karteczka po zminimalizowaniu (klik = rozwiń, przeciągnięcie = przesuń)
+        self.mini = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=0)
+        mrow = ctk.CTkFrame(self.mini, fg_color="transparent")
+        mrow.pack(padx=10, pady=5)
+        mdot = U.dot(mrow, T.RED, 7)
+        mdot.pack(side="left")
+        mlbl = U.label(mrow, "Zdalnie", 12, "medium", cursor="hand2")
+        mlbl.pack(side="left", padx=(6, 0))
+        for w in (self.mini, mrow, mdot, mlbl):
+            w.bind("<ButtonPress-1>", self._start)
+            w.bind("<B1-Motion>", self._drag)
+            w.bind("<ButtonRelease-1>", self._mini_release)
+        U.Tooltip(mlbl, "Ktoś steruje tym komputerem – kliknij, aby pokazać szczegóły")
+
+        self.full.pack(fill="both", expand=True, padx=1, pady=1)
         self.update_idletasks()
-        w, h = 300, self.winfo_reqheight()
-        self.geometry(f"{w}x{h}+{self.winfo_screenwidth() - w - 20}+{self.winfo_screenheight() - h - 64}")
+        h = self.winfo_reqheight()
+        self.geometry(f"{self.W}x{h}+{self.winfo_screenwidth() - self.W - 20}+{self.winfo_screenheight() - h - 64}")
+        if minimized:
+            self.set_minimized(True, notify=False)
 
     def set_sessions(self, names):
         self.who.configure(text=", ".join(names)[:40])
 
+    def set_minimized(self, on, notify=True):
+        if on == self.minimized:
+            return
+        self.update_idletasks()
+        x, y = self.winfo_x(), self.winfo_y()
+        w, h = self.winfo_width(), self.winfo_height()
+        self.minimized = on
+        (self.full if on else self.mini).pack_forget()
+        (self.mini if on else self.full).pack(fill="both", expand=True, padx=1, pady=1)
+        self.update_idletasks()
+        nw, nh = (self.mini.winfo_reqwidth() + 2, self.mini.winfo_reqheight() + 2) if on else \
+            (self.W, self.full.winfo_reqheight() + 2)
+        # zostaje przyklejone do tego samego prawego dolnego rogu
+        nx = min(max(0, x + w - nw), self.winfo_screenwidth() - nw)
+        ny = min(max(0, y + h - nh), self.winfo_screenheight() - nh)
+        self.geometry(f"{nw}x{nh}+{nx}+{ny}")
+        if notify and self.on_toggle:
+            self.on_toggle(on)
+
     def _start(self, e):
+        self._moved = False
         self._dx, self._dy = e.x_root - self.winfo_x(), e.y_root - self.winfo_y()
+        self._sx, self._sy = e.x_root, e.y_root
 
     def _drag(self, e):
+        if abs(e.x_root - self._sx) + abs(e.y_root - self._sy) > 4:
+            self._moved = True
         self.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
+
+    def _mini_release(self, _e):
+        if not self._moved:
+            self.set_minimized(False)
 
 
 # =========================================================================== menedżer plików

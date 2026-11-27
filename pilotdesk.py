@@ -1381,11 +1381,17 @@ class App:
             if not self.banner or not self.banner.winfo_exists():
                 self.banner = ConnectedBanner(self.root, on_disconnect=lambda: self.host and self.host.disconnect_all(),
                                               on_chat=lambda: self.host and self.host.sessions and
-                                              self._host_chat(next(iter(self.host.sessions)), None))
+                                              self._host_chat(next(iter(self.host.sessions)), None),
+                                              minimized=bool(self.cfg.get("banner_minimized")),
+                                              on_toggle=self._banner_toggled)
             self.banner.set_sessions([s.client for s in sessions])
         elif self.banner and self.banner.winfo_exists():
             self.banner.destroy()
             self.banner = None
+
+    def _banner_toggled(self, minimized):
+        self.cfg["banner_minimized"] = bool(minimized)  # zapamiętane na następne sesje
+        save_config(self.cfg)
 
     def _host_chat(self, sess, text):
         from pd_viewer import ChatWindow
