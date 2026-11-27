@@ -16,7 +16,15 @@ jobs:
       - run: python -m pip install -r requirements.txt pyinstaller
       - run: python build_exe.py
         timeout-minutes: 20
+      - name: Autotest PilotDesk.exe
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          ./dist/PilotDesk.exe --selftest selftest.json; code=$?
+          cat selftest.json
+          exit $code
       - name: Test usługi
+        if: always()
         timeout-minutes: 12
         env:
           PYTHONIOENCODING: utf-8
