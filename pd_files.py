@@ -496,17 +496,7 @@ class ExplorerPane(ctk.CTkFrame):
         if sel:
             items.append(("Usuń (Delete)", lambda: self.mgr.delete(self)))
         items += [None, ("Odśwież (F5)", self.refresh)]
-        m = tk.Menu(self, tearoff=False)
-        d = U.dark()
-        m.configure(bg="#141417" if d else "#FFFFFF", fg="#EDEDF0" if d else "#09090B",
-                    activebackground="#232328" if d else "#F0F0F2", activeforeground="#FFFFFF" if d else "#09090B",
-                    bd=1, relief="solid", font=(T.SANS, 10), activeborderwidth=0)
-        for it in items:
-            if it is None:
-                m.add_separator()
-            else:
-                m.add_command(label="  " + it[0] + "      ", command=it[1])
-        m.tk_popup(e.x_root, e.y_root)
+        U.popup_menu(self.list, items, at=(e.x_root, e.y_root))
 
     # ------------------------------------------------------------ przeciąganie między panelami
     def _press(self, e):

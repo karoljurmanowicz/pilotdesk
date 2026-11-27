@@ -142,8 +142,9 @@ class Chip(ctk.CTkFrame):
         self.btn.configure(image=T.icon(name, 16, T.TEXT if self.on and self.toggle else T.TEXT_2))
 
 
-def popup_menu(widget, items):
-    """items: [(etykieta, funkcja)] / None = separator. Etykieta zaczynająca się od „✓ ” = zaznaczona."""
+def popup_menu(widget, items, at=None):
+    """items: [(etykieta, funkcja)] / None = separator. Etykieta zaczynająca się od „✓ ” = zaznaczona.
+    at=(x, y) – pozycja na ekranie (np. pod kursorem); domyślnie pod widżetem."""
     d = dark()
     m = tk.Menu(widget, tearoff=False, bg="#141417" if d else "#FFFFFF", fg="#EDEDF0" if d else "#09090B",
                 activebackground="#232328" if d else "#F0F0F2", activeforeground="#FFFFFF" if d else "#09090B",
@@ -153,7 +154,7 @@ def popup_menu(widget, items):
             m.add_separator()
         else:
             m.add_command(label="  " + it[0] + "      ", command=it[1])
-    m.tk_popup(widget.winfo_rootx(), widget.winfo_rooty() + widget.winfo_height() + 4)
+    m.tk_popup(*(at or (widget.winfo_rootx(), widget.winfo_rooty() + widget.winfo_height() + 4)))
 
 
 class Tooltip:
