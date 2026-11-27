@@ -131,7 +131,8 @@ def main():
             import traceback
             results["schowek_usluga"] = {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-1500:]}
         print(json.dumps(results["schowek_usluga"], ensure_ascii=False, indent=1))
-        gui.kill()
+        # onefile = opakowanie + właściwy program: zamykamy całe drzewo procesów
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(gui.pid)], capture_output=True)
 
         section("ponowna instalacja – stary agent musi zniknąć")
         print("agenci przed:", agents())

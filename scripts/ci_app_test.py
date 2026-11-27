@@ -134,7 +134,13 @@ def clipboard_test(ip, port, password=None):
 
 def main():
     os.makedirs(DST_DIR, exist_ok=True)
-    shutil.copy2(SRC, EXE)
+    for _ in range(20):  # poprzedni test mógł jeszcze zamykać program
+        try:
+            shutil.copy2(SRC, EXE)
+            break
+        except PermissionError:
+            subprocess.run(["taskkill", "/F", "/IM", "PilotDesk.exe"], capture_output=True)
+            time.sleep(1)
     cfgp = os.path.join(os.path.expanduser("~"), ".pilotdesk.json")
     cfg = {}
     ensure_host_identity(cfg)
@@ -198,7 +204,7 @@ def finish(app, ok):
     err = os.path.join(os.environ["LOCALAPPDATA"], "PilotDesk", "error.log")
     if os.path.exists(err):
         print("--- error.log\n" + open(err, encoding="utf-8", errors="replace").read()[-3000:])
-    app.kill()
+    subprocess.run(["taskkill", "/F", "/T", "/PID", str(app.pid)], capture_output=True)
     section("WYNIK")
     print(json.dumps(results, ensure_ascii=False, indent=1))
     ok = ok and not hung
