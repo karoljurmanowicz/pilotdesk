@@ -42,12 +42,19 @@ def _log(msg):
 
 MOD_NAMES = ("ctrl", "ctrl_l", "ctrl_r", "alt", "alt_l", "alt_r", "alt_gr", "shift", "shift_l",
              "shift_r", "cmd", "cmd_l", "cmd_r")
-BITRATES = {85: 8_000_000, 60: 4_000_000, 45: 2_000_000, 30: 800_000}
+BITRATES = {90: 25_000_000, 85: 20_000_000, 60: 8_000_000, 45: 3_000_000, 30: 1_000_000}  # dla 1920×1080
+
+
+def bitrate_for(quality, w, h):
+    """Limit przepływności: wg jakości i skalowany do liczby pikseli (4K potrzebuje ~4× więcej niż 1080p)."""
+    q = min(BITRATES, key=lambda k: abs(k - quality))
+    return int(BITRATES[q] * max(0.35, (w * h) / (1920 * 1080)))
 
 
 def host_caps():
     return {"h264": MEDIA.h264_encoder_name() is not None, "audio": MEDIA.audio_capture_ok(),
-            "privacy": sys.platform == "win32", "clipfiles": CF.available(), "reboot": True}
+            "privacy": sys.platform == "win32", "clipfiles": CF.available(), "reboot": True,
+            "resolution": sys.platform == "win32"}
 
 
 class Lockout:
@@ -415,6 +422,8 @@ class HostSession:
         self.win_mouse = sys.platform == "win32"  # mysz przez własne SendInput (pd_winutil), nie pynput
         self._clicks_logged = 0
         self._click_fail_told = 0.0
+        self.res_changed = set()  # urządzenia, którym zmieniliśmy rozdzielczość (przywracamy po rozłączeniu)
+        self.reset_capture = False
 
     # ---------------------------------------------------------------- pętla główna
     def stop(self):
@@ -491,6 +500,7 @@ class HostSession:
             if self.clip:
                 self.clip.stop()
             self._set_privacy(False, notify=False)
+            self._restore_resolution()
 
     def _pinger(self):
         while self.running:
@@ -533,7 +543,8 @@ class HostSession:
             if not self.running:
                 break
             try:
-                if self.svc.agent_mode and W.sync_input_desktop():
+                if (self.svc.agent_mode and W.sync_input_desktop()) or self.reset_capture:
+                    self.reset_capture = False  # np. po zmianie rozdzielczości – mss pamięta stary układ
                     if sct:
                         sct.close()
                     sct = None
@@ -597,7 +608,7 @@ class HostSession:
                     if enc is None or ekey != enc_key:
                         if enc:
                             enc.close()
-                        enc = MEDIA.VideoEncoder(Wd, Hd, self.fps, BITRATES.get(self.quality, 4_000_000))
+                        enc = MEDIA.VideoEncoder(Wd, Hd, self.fps, bitrate_for(self.quality, Wd, Hd), self.quality)
                         enc_key = ekey
                     if changed_full:
                         enc.force_key = True
@@ -656,7 +667,8 @@ class HostSession:
             parts = [struct.pack(">IHHHB", seq, Wd, Hd, len(rects), 0)]
             for (x, y, w, h) in rects:
                 bio = io.BytesIO()
-                img.crop((x, y, x + w, y + h)).save(bio, "JPEG", quality=quality)
+                img.crop((x, y, x + w, y + h)).save(bio, "JPEG", quality=quality,
+                                                    subsampling=0 if quality >= 80 else 2)  # 4:4:4 = ostry tekst
                 jpg = bio.getvalue()
                 parts.append(struct.pack(">HHHHI", x, y, w, h, len(jpg)))
                 parts.append(jpg)
@@ -698,6 +710,54 @@ class HostSession:
         except Exception:
             if self.audio:
                 self.audio.stop()
+
+    # ---------------------------------------------------------------- rozdzielczość (Windows)
+    def _display_device(self):
+        mon = self.cur_mon or {"left": 0, "top": 0, "width": 2, "height": 2}
+        return W.display_device_at(mon["left"] + mon["width"] // 2, mon["top"] + mon["height"] // 2)
+
+    def _send_display_modes(self):
+        try:
+            if self.svc.agent_mode:
+                W.sync_input_desktop()
+            dev = self._display_device()
+            modes, cur = W.display_modes(dev)
+            self.send_json({"t": "display_modes", "modes": [list(m) for m in modes], "current": list(cur or ()),
+                            "changed": dev in self.res_changed, "device": dev})
+        except Exception as e:
+            self.send_json({"t": "display_modes", "modes": [], "current": [], "error": str(e)})
+
+    def _set_resolution(self, m):
+        try:
+            if self.svc.agent_mode:
+                W.sync_input_desktop()
+            dev = self._display_device()
+            if m.get("restore"):
+                ok, err = W.restore_display_mode(dev), "nie udało się przywrócić"
+                self.res_changed.discard(dev)
+                w, h = (W.display_modes(dev)[1] or (0, 0))
+            else:
+                w, h = int(m.get("w", 0)), int(m.get("h", 0))
+                ok, err = W.set_display_mode(dev, w, h)
+                if ok:
+                    self.res_changed.add(dev)
+            self.svc.log(f"Rozdzielczość {dev}: {w}×{h} – {'OK' if ok else err}")
+        except Exception as e:
+            ok, err, w, h = False, str(e), 0, 0
+        self.reset_capture = True
+        self.force_full = True
+        self.send_json({"t": "resolution_result", "ok": ok, "error": "" if ok else err, "w": w, "h": h})
+
+    def _restore_resolution(self):
+        for dev in list(self.res_changed):
+            try:
+                if self.svc.agent_mode:
+                    W.sync_input_desktop()
+                W.restore_display_mode(dev)
+                self.svc.log(f"Przywrócono rozdzielczość {dev}")
+            except Exception:
+                pass
+        self.res_changed.clear()
 
     def _set_privacy(self, on, notify=True):
         err = ""
@@ -824,6 +884,10 @@ class HostSession:
                 self.force_full = True
             elif t == "audio":
                 self._set_audio(bool(m.get("on")))
+            elif t == "display_modes":
+                self._send_display_modes()
+            elif t == "set_resolution":
+                threading.Thread(target=self._set_resolution, args=(m,), daemon=True).start()
             elif t == "privacy":
                 self._set_privacy(bool(m.get("on")))
             elif t == "reboot":

@@ -88,6 +88,7 @@ def selftest(out):
         try:
             report["mouse_inject"] = mouse_selftest()
             report["ok"] &= report["mouse_inject"].get("struct_ok", False)
+            report["ok"] &= str(report["mouse_inject"].get("tkdnd", "")).startswith("ok")
         except Exception:
             report["mouse_inject"] = {"error": traceback.format_exc()}
             report["ok"] = False
@@ -130,7 +131,36 @@ def mouse_selftest():
     root.destroy()
     r["tk_events"] = got
     r["click_received"] = ("down", 1) in got and ("up", 1) in got
+    try:  # rozdzielczość ekranu (zmiana z okna sesji)
+        d = W._disp_api()
+        r["devmode_size"] = ctypes.sizeof(d["DEVMODEW"])
+        r["struct_ok"] = r["struct_ok"] and r["devmode_size"] == 220
+        dev = W.display_device_at(10, 10)
+        modes, cur = W.display_modes(dev)
+        r["display"] = {"device": dev, "current": cur, "modes": modes[:8]}
+    except Exception as e:
+        r["display_error"] = repr(e)
+        r["struct_ok"] = False
+    try:
+        import tkinterdnd2  # noqa – przeciąganie plików z Eksploratora
+        r["tkdnd"] = _tkdnd_check()
+    except Exception as e:
+        r["tkdnd"] = f"BŁĄD: {e!r}"
     return r
+
+
+def _tkdnd_check():
+    import tkinter as tk
+    from tkinterdnd2 import TkinterDnD
+    root = tk.Tk()
+    try:
+        v = TkinterDnD._require(root)
+        f = tk.Frame(root)
+        f.pack()
+        root.tk.call("tkdnd::drop_target", "register", f._w, "DND_Files")
+        return f"ok {v}"
+    finally:
+        root.destroy()
 
 
 def run():

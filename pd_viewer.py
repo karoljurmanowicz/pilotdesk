@@ -48,7 +48,7 @@ PUNCT = {
 }
 
 QUALITY_PRESETS = [
-    ("Najlepsza jakość", {"quality": 85, "scale": 1.0, "fps": 30}),
+    ("Najlepsza jakość (ostry tekst)", {"quality": 90, "scale": 1.0, "fps": 30}),
     ("Zrównoważona", {"quality": 60, "scale": 1.0, "fps": 30}),
     ("Szybkość", {"quality": 45, "scale": 0.75, "fps": 24}),
     ("Słabe łącze", {"quality": 30, "scale": 0.5, "fps": 12}),
@@ -235,12 +235,14 @@ class SessionView(ctk.CTkFrame):
         self.req_counter = 0
         self.ls_handlers = {}
         self.op_handlers = {}
-        self.fit = True
+        z = (self.app.cfg.get("view_zoom") if self.app else None) or "fit"
+        self.zoom = z if z in ("fit", "sharp") or isinstance(z, (int, float)) else "fit"  # "fit" | "sharp" | 1.0…
+        self.remote_modes = None
         self.clip_sync = True
         self.input_enabled = True
         self.audio_on = True
         self.privacy_on = False
-        self.preset = QUALITY_PRESETS[1][0]
+        self.preset = QUALITY_PRESETS[0][0]  # w sieci domowej przepustowości jest pod dostatkiem
         self.reboot_pending = False
         self.reconnecting = False
         self.player = None
@@ -287,7 +289,7 @@ class SessionView(ctk.CTkFrame):
         self.c_input = chip("mouse", self._toggle_input, "Sterowanie (wyłączone = tylko podgląd)", True, True)
         self.c_priv = chip("privacy", self._toggle_privacy, "Tryb prywatności – czarny ekran na komputerze zdalnym", True, False)
         sep()
-        self.c_fit = chip("fit", self._toggle_fit, "Dopasuj obraz do okna / 1:1", True, True)
+        self.c_fit = chip("fit", self._menu_view, "Skala obrazu i rozdzielczość komputera zdalnego")
         chip("fullscreen", self.win.toggle_fullscreen, "Pełny ekran (Ctrl+Alt+Enter)")
         self.c_more = chip("more", self._menu_more, "Więcej")
         self.sep_line = U.hairline(self, side="top", fill="x")
@@ -605,20 +607,34 @@ class SessionView(ctk.CTkFrame):
     def _render(self, src):
         cw, chh = max(1, self.canvas.winfo_width()), max(1, self.canvas.winfo_height())
         W, H = src.size
-        if self.fit:
+        z = self.zoom
+        if z in ("fit", "sharp"):
             s = min(cw / W, chh / H)
-            dw, dh = max(1, int(W * s)), max(1, int(H * s))
+            if z == "sharp" and s >= 1:
+                s = float(int(s))  # całkowite powiększenie = idealnie ostre piksele
+            elif s >= 1.9 and abs(s - round(s)) / s < 0.04:
+                s = float(round(s))  # prawie 2× (np. 1080p na 4K) – wolimy ostre 2× od rozmycia
+        else:
+            s = float(z)
+        dw, dh = max(1, int(round(W * s))), max(1, int(round(H * s)))
+        if dw <= cw and dh <= chh:
             ox, oy = (cw - dw) // 2, (chh - dh) // 2
             self.canvas.configure(scrollregion=(0, 0, cw, chh))
             self.hbar.grid_remove()
             self.vbar.grid_remove()
         else:
-            dw, dh = W, H
-            ox, oy = max(0, (cw - W) // 2), max(0, (chh - H) // 2)
-            self.canvas.configure(scrollregion=(0, 0, max(cw, W), max(chh, H)))
-            (self.hbar.grid(row=1, column=0, sticky="ew") if W > cw else self.hbar.grid_remove())
-            (self.vbar.grid(row=0, column=1, sticky="ns") if H > chh else self.vbar.grid_remove())
-        img = src if (dw, dh) == (W, H) else src.resize((dw, dh), Image.BILINEAR)
+            ox, oy = max(0, (cw - dw) // 2), max(0, (chh - dh) // 2)
+            self.canvas.configure(scrollregion=(0, 0, max(cw, dw), max(chh, dh)))
+            (self.hbar.grid(row=1, column=0, sticky="ew") if dw > cw else self.hbar.grid_remove())
+            (self.vbar.grid(row=0, column=1, sticky="ns") if dh > chh else self.vbar.grid_remove())
+        if (dw, dh) == (W, H):
+            img = src
+        elif dw % W == 0 and dh % H == 0:
+            img = src.resize((dw, dh), Image.NEAREST)  # 2×, 3× – bez rozmycia
+        elif dw > W:
+            img = src.resize((dw, dh), Image.BICUBIC)
+        else:
+            img = src.resize((dw, dh), Image.BOX if s < 0.75 else Image.BILINEAR)
         if self.photo is None or self.photo.width() != dw or self.photo.height() != dh:
             self.photo = ImageTk.PhotoImage(img)
             self.canvas.itemconfigure(self.img_item, image=self.photo)
@@ -703,6 +719,15 @@ class SessionView(ctk.CTkFrame):
                                                           " (lokalna mysz i klawiatura nie są zablokowane)"), "ok")
         elif t == "notice":
             self.toast(m.get("text", ""), m.get("kind", "info"), 12000)
+        elif t == "display_modes":
+            self.remote_modes = m
+        elif t == "resolution_result":
+            self.remote_modes = None  # odświeżymy przy następnym otwarciu menu
+            if m.get("ok"):
+                self.toast(f"Rozdzielczość komputera zdalnego: {m.get('w')}×{m.get('h')}", "ok")
+                self.send_json({"t": "refresh"})
+            else:
+                self.toast(f"Nie udało się zmienić rozdzielczości: {m.get('error', '?')}", "error", 6000)
         elif t == "rebooting":
             self.reboot_pending = True
             self.toast("Komputer zdalny się restartuje – połączę się ponownie automatycznie.", "info", 6000)
@@ -753,10 +778,45 @@ class SessionView(ctk.CTkFrame):
             return
         self.send_json({"t": "privacy", "on": not self.privacy_on})
 
-    def _toggle_fit(self):
-        self.fit = not self.fit
-        self.c_fit.set(self.fit)
+    def _set_zoom(self, z):
+        self.zoom = z
         self.dirty = True
+        if self.app:
+            self.app.cfg["view_zoom"] = z
+            try:
+                from pd_common import save_config
+                save_config(self.app.cfg)
+            except Exception:
+                pass
+
+    def _menu_view(self):
+        def mark(on, text):
+            return ("✓ " if on else "    ") + text
+        z = self.zoom
+        items = [(mark(z == "fit", "Dopasuj do okna"), lambda: self._set_zoom("fit")),
+                 (mark(z == "sharp", "Dopasuj – ostre piksele (pełne wielokrotności)"), lambda: self._set_zoom("sharp")),
+                 (mark(z == 1.0, "100% – rzeczywisty rozmiar"), lambda: self._set_zoom(1.0)),
+                 (mark(z == 1.5, "150%"), lambda: self._set_zoom(1.5)),
+                 (mark(z == 2.0, "200%"), lambda: self._set_zoom(2.0))]
+        if self.hcaps.get("resolution"):
+            items.append(None)
+            modes = self.remote_modes
+            if modes is None:
+                items.append(("    Rozdzielczość komputera zdalnego: wczytuję…", lambda: None))
+                self.send_json({"t": "display_modes"})
+            else:
+                cur = tuple(modes.get("current") or ())
+                for w, h in modes.get("modes", [])[:14]:
+                    items.append((mark((w, h) == cur, f"Rozdzielczość zdalna {w}×{h}"),
+                                  lambda w=w, h=h: self._set_remote_res(w, h)))
+                if modes.get("changed"):
+                    items.append(("    Przywróć oryginalną rozdzielczość",
+                                  lambda: self.send_json({"t": "set_resolution", "restore": True})))
+        U.popup_menu(self.c_fit, items)
+
+    def _set_remote_res(self, w, h):
+        self.send_json({"t": "set_resolution", "w": w, "h": h})
+        self.toast(f"Zmieniam rozdzielczość komputera zdalnego na {w}×{h}… (wróci po rozłączeniu)")
 
     def _menu_quality(self):
         def pick(name, s):

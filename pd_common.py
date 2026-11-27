@@ -545,13 +545,64 @@ def viewer_handshake(sock, key_provider, client_info, mode="password", on_code=N
 
 # --------------------------------------------------------------------------- pliki
 
-def downloads_dir():
-    home = os.path.expanduser("~")
-    for n in ("Downloads", "Pobrane"):
+_KNOWN = {"desktop": "B4BFCC3A-DB2C-424C-B029-7FE99A87C641", "downloads": "374DE290-123F-4565-9164-39C4925E467B",
+          "documents": "FDD39AD0-238F-46AF-ADB4-6C85480369C7"}
+
+
+def _console_user_token():
+    """Token zalogowanego użytkownika – gdy działamy jako SYSTEM (agent usługi). Inaczej None."""
+    if sys.platform != "win32" or "systemprofile" not in os.path.expanduser("~").lower():
+        return None
+    try:
+        import win32ts
+        return win32ts.WTSQueryUserToken(win32ts.WTSGetActiveConsoleSessionId())
+    except Exception:
+        return None
+
+
+def user_home():
+    """Folder domowy użytkownika siedzącego przy komputerze. Agent usługi działa jako SYSTEM – bez tego „Pobrane”
+    i „Pulpit” wskazywały folder systemowy Windows zamiast folderu użytkownika."""
+    tok = _console_user_token()
+    if tok is not None:
+        try:
+            import win32profile
+            return win32profile.GetUserProfileDirectory(tok)
+        except Exception:
+            pass
+    return os.path.expanduser("~")
+
+
+def known_folder(name):
+    """Pulpit / Pobrane / Dokumenty (Windows: prawdziwa lokalizacja, także przeniesiona do OneDrive)."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            import uuid
+            from ctypes import wintypes
+            g = uuid.UUID(_KNOWN[name]).bytes_le
+            buf = ctypes.c_wchar_p()
+            tok = _console_user_token()
+            f = ctypes.WinDLL("shell32").SHGetKnownFolderPath
+            f.argtypes = [ctypes.c_char_p, wintypes.DWORD, wintypes.HANDLE, ctypes.POINTER(ctypes.c_wchar_p)]
+            if f(g, 0, int(tok) if tok is not None else None, ctypes.byref(buf)) == 0 and buf.value:
+                path = buf.value
+                ctypes.WinDLL("ole32").CoTaskMemFree(buf)
+                return path
+        except Exception:
+            pass
+    home = user_home()
+    names = {"desktop": ("Desktop", "Pulpit"), "downloads": ("Downloads", "Pobrane"),
+             "documents": ("Documents", "Dokumenty")}[name]
+    for n in names:
         d = os.path.join(home, n)
         if os.path.isdir(d):
-            return os.path.join(d, "PilotDesk")
-    return os.path.join(home, "PilotDesk")
+            return d
+    return home
+
+
+def downloads_dir():
+    return os.path.join(known_folder("downloads"), "PilotDesk")
 
 
 def safe_rel_path(rel):
@@ -686,21 +737,47 @@ def send_file(ch, path, rel, extra=None, progress=None, cancel=None):
     return True
 
 
+def _drive_label(root):
+    """„Dysk lokalny (C:)” – jak w Eksploratorze Windows."""
+    import ctypes
+    k = ctypes.WinDLL("kernel32")
+    kind = k.GetDriveTypeW(root)
+    buf = ctypes.create_unicode_buffer(261)
+    label = ""
+    if kind != 5:  # nie odpytujemy pustego napędu CD/DVD
+        try:
+            if k.GetVolumeInformationW(root, buf, 261, None, None, None, None, 0):
+                label = buf.value
+        except Exception:
+            pass
+    default = {2: "Dysk wymienny", 3: "Dysk lokalny", 4: "Dysk sieciowy", 5: "Napęd DVD"}.get(kind, "Dysk")
+    return f"{label or default} ({root[:2]})", {2: "usb", 4: "network", 5: "dvd"}.get(kind, "drive")
+
+
 def list_roots():
-    home = os.path.expanduser("~")
+    """„Ten komputer”: szybki dostęp (Pulpit, Dokumenty, Pobrane) i dyski."""
     out = []
+    for key, name in (("desktop", "Pulpit"), ("documents", "Dokumenty"), ("downloads", "Pobrane")):
+        try:
+            d = known_folder(key)
+        except Exception:
+            d = None
+        if d and os.path.isdir(d) and (sys.platform == "win32" or d != user_home()):
+            out.append({"name": name, "path": d, "dir": True, "size": 0, "mtime": 0, "kind": key})
     if sys.platform == "win32":
         for L in string.ascii_uppercase:
             d = f"{L}:\\"
             if os.path.exists(d):
-                out.append({"name": d, "path": d, "dir": True, "size": 0, "mtime": 0})
+                try:
+                    name, kind = _drive_label(d)
+                except Exception:
+                    name, kind = d, "drive"
+                out.append({"name": name, "path": d, "dir": True, "size": 0, "mtime": 0, "kind": kind})
     else:
-        out.append({"name": "/", "path": "/", "dir": True, "size": 0, "mtime": 0})
-    for n in ("", "Desktop", "Pulpit", "Documents", "Dokumenty", "Downloads", "Pobrane"):
-        d = os.path.join(home, n) if n else home
-        if os.path.isdir(d):
-            out.append({"name": ("🏠 " + os.path.basename(d)) if n == "" else n, "path": d,
-                        "dir": True, "size": 0, "mtime": 0})
+        out.append({"name": "/", "path": "/", "dir": True, "size": 0, "mtime": 0, "kind": "drive"})
+        home = user_home()
+        out.insert(0, {"name": os.path.basename(home) or home, "path": home, "dir": True, "size": 0, "mtime": 0,
+                       "kind": "home"})
     return out
 
 
@@ -715,6 +792,8 @@ def list_dir(path, limit=10000):
             try:
                 is_dir = e.is_dir()
                 st = e.stat()
+                if getattr(st, "st_file_attributes", 0) & 0x6:  # ukryte/systemowe – jak w Eksploratorze
+                    continue
                 entries.append({"name": e.name, "path": os.path.join(path, e.name), "dir": is_dir,
                                 "size": 0 if is_dir else st.st_size, "mtime": int(st.st_mtime)})
             except OSError:

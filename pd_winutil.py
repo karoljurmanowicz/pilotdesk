@@ -295,6 +295,105 @@ def dpi_info():
     return ", ".join(parts)
 
 
+# --------------------------------------------------------------------------- rozdzielczość ekranu
+_DISP = {}
+
+
+def _disp_api():
+    if _DISP:
+        return _DISP
+
+    class DEVMODEW(ctypes.Structure):
+        _fields_ = [("dmDeviceName", wintypes.WCHAR * 32), ("dmSpecVersion", wintypes.WORD),
+                    ("dmDriverVersion", wintypes.WORD), ("dmSize", wintypes.WORD), ("dmDriverExtra", wintypes.WORD),
+                    ("dmFields", wintypes.DWORD), ("dmPositionX", wintypes.LONG), ("dmPositionY", wintypes.LONG),
+                    ("dmDisplayOrientation", wintypes.DWORD), ("dmDisplayFixedOutput", wintypes.DWORD),
+                    ("dmColor", ctypes.c_short), ("dmDuplex", ctypes.c_short), ("dmYResolution", ctypes.c_short),
+                    ("dmTTOption", ctypes.c_short), ("dmCollate", ctypes.c_short), ("dmFormName", wintypes.WCHAR * 32),
+                    ("dmLogPixels", wintypes.WORD), ("dmBitsPerPel", wintypes.DWORD), ("dmPelsWidth", wintypes.DWORD),
+                    ("dmPelsHeight", wintypes.DWORD), ("dmDisplayFlags", wintypes.DWORD),
+                    ("dmDisplayFrequency", wintypes.DWORD), ("dmICMMethod", wintypes.DWORD),
+                    ("dmICMIntent", wintypes.DWORD), ("dmMediaType", wintypes.DWORD), ("dmDitherType", wintypes.DWORD),
+                    ("dmReserved1", wintypes.DWORD), ("dmReserved2", wintypes.DWORD),
+                    ("dmPanningWidth", wintypes.DWORD), ("dmPanningHeight", wintypes.DWORD)]
+
+    class MONITORINFOEXW(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
+                    ("dwFlags", wintypes.DWORD), ("szDevice", wintypes.WCHAR * 32)]
+
+    u = ctypes.WinDLL("user32", use_last_error=True)
+    u.EnumDisplaySettingsW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(DEVMODEW)]
+    u.EnumDisplaySettingsW.restype = wintypes.BOOL
+    u.ChangeDisplaySettingsExW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(DEVMODEW), wintypes.HWND,
+                                           wintypes.DWORD, ctypes.c_void_p]
+    u.ChangeDisplaySettingsExW.restype = ctypes.c_long
+    u.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+    u.MonitorFromPoint.restype = wintypes.HANDLE
+    u.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MONITORINFOEXW)]
+    u.GetMonitorInfoW.restype = wintypes.BOOL
+    _DISP.update(DEVMODEW=DEVMODEW, MONITORINFOEXW=MONITORINFOEXW, u=u)
+    return _DISP
+
+
+def display_device_at(x, y):
+    """Nazwa urządzenia (np. \\\\.\\DISPLAY1) monitora, na którym leży punkt (x, y)."""
+    api = _disp_api()
+    hmon = api["u"].MonitorFromPoint(wintypes.POINT(int(x), int(y)), 2)  # MONITOR_DEFAULTTONEAREST
+    mi = api["MONITORINFOEXW"]()
+    mi.cbSize = ctypes.sizeof(mi)
+    if not api["u"].GetMonitorInfoW(hmon, ctypes.byref(mi)):
+        return None
+    return mi.szDevice
+
+
+def _devmode(device, i):
+    api = _disp_api()
+    dm = api["DEVMODEW"]()
+    dm.dmSize = ctypes.sizeof(dm)
+    return dm if api["u"].EnumDisplaySettingsW(device, i, ctypes.byref(dm)) else None
+
+
+def display_modes(device):
+    """(lista (szer, wys) od największej, bieżąca (szer, wys)). Tylko tryby o bieżącej głębi kolorów."""
+    cur = _devmode(device, 0xFFFFFFFF)  # ENUM_CURRENT_SETTINGS
+    if cur is None:
+        return [], None
+    seen = set()
+    i = 0
+    while True:
+        dm = _devmode(device, i)
+        if dm is None or i > 2000:
+            break
+        i += 1
+        if dm.dmBitsPerPel == cur.dmBitsPerPel and dm.dmPelsWidth >= 800 and dm.dmPelsHeight >= 600:
+            seen.add((int(dm.dmPelsWidth), int(dm.dmPelsHeight)))
+    return sorted(seen, key=lambda m: (-m[0] * m[1], -m[0])), (int(cur.dmPelsWidth), int(cur.dmPelsHeight))
+
+
+DISP_ERRORS = {1: "wymaga ponownego uruchomienia", -1: "sterownik odmówił", -2: "nieobsługiwany tryb",
+               -3: "nie można zapisać", -4: "błędne parametry", -5: "błędne parametry", -6: "nieobsługiwany tryb"}
+
+
+def set_display_mode(device, w, h):
+    """Zmienia rozdzielczość tymczasowo (bez zapisu w ustawieniach Windows). Zwraca (ok, opis_błędu)."""
+    api = _disp_api()
+    dm = _devmode(device, 0xFFFFFFFF)
+    if dm is None:
+        return False, "brak informacji o monitorze"
+    dm.dmPelsWidth, dm.dmPelsHeight = int(w), int(h)
+    dm.dmFields = 0x00080000 | 0x00100000  # DM_PELSWIDTH | DM_PELSHEIGHT
+    r = api["u"].ChangeDisplaySettingsExW(device, ctypes.byref(dm), None, 0x00000002, None)  # CDS_TEST
+    if r == 0:
+        r = api["u"].ChangeDisplaySettingsExW(device, ctypes.byref(dm), None, 0, None)
+    return r == 0, DISP_ERRORS.get(r, f"kod {r}")
+
+
+def restore_display_mode(device):
+    """Przywraca rozdzielczość zapisaną w ustawieniach Windows."""
+    api = _disp_api()
+    return api["u"].ChangeDisplaySettingsExW(device, None, None, 0, None) == 0
+
+
 _current_desktop = {"name": None}
 
 

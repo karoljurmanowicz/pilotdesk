@@ -62,6 +62,73 @@ def ask_session(ip, port):
     return info
 
 
+def wait_for(cond, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def clipboard_test(ip, port):
+    """Wspólny schowek na prawdziwym Windows: tekst i pliki w obie strony (ten proces = „drugi komputer”)."""
+    import secrets
+    import tempfile
+    import threading
+    import pyperclip
+    import pd_clipfiles as CF
+    from pd_common import M_FILE, send_file
+    s = socket.create_connection((ip, port), timeout=10)
+    s.settimeout(60)
+    ch, _hello, _ok, _ = viewer_handshake(s, None, {"client": "ci-schowek", "video": False,
+                                                    "caps": {"clipfiles": True}}, mode="ask")
+    msgs = []
+
+    def reader():
+        try:
+            while True:
+                t, body = ch.recv()
+                if t == M_JSON:
+                    msgs.append(json.loads(body))
+                elif t == M_FILE:
+                    pass
+        except Exception:
+            pass
+    threading.Thread(target=reader, daemon=True).start()
+    time.sleep(2)
+    res = {}
+    t1 = "PD-z-PC1-zażółć"
+    ch.send_json({"t": "clipboard", "text": t1})
+    res["tekst_do_komputera_zdalnego"] = wait_for(lambda: pyperclip.paste() == t1, 6)
+    t2 = "PD-z-PC2-gęślą-jaźń"
+    pyperclip.copy(t2)
+    res["tekst_z_komputera_zdalnego"] = wait_for(
+        lambda: any(m.get("t") == "clipboard" and m.get("text") == t2 for m in msgs), 8)
+    tmp = tempfile.mkdtemp()
+    name = "plik-testowy.txt"
+    fp = os.path.join(tmp, name)
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write("PilotDesk " * 1000)
+    cid = secrets.token_hex(8)
+    ch.send_json({"t": "clip_files_begin", "id": cid, "names": [name], "total": os.path.getsize(fp)})
+    send_file(ch, fp, name, extra={"clip": cid})
+    ch.send_json({"t": "clip_files_end", "id": cid, "names": [name]})
+
+    def files_on_clip():
+        got = CF.get_files() or []
+        return any(g.endswith(name) for g in got)
+    res["pliki_do_komputera_zdalnego"] = wait_for(files_on_clip, 8)
+    fp2 = os.path.join(tmp, "z-drugiej-strony.txt")
+    with open(fp2, "w", encoding="utf-8") as f:
+        f.write("x" * 5000)
+    res["set_files_ok"] = CF.set_files([fp2])
+    res["pliki_z_komputera_zdalnego"] = wait_for(
+        lambda: any(m.get("t") == "clip_files_end" and "z-drugiej-strony.txt" in m.get("names", []) for m in msgs), 10)
+    ch.close()
+    return res
+
+
 def main():
     os.makedirs(DST_DIR, exist_ok=True)
     shutil.copy2(SRC, EXE)
@@ -102,7 +169,15 @@ def main():
         print(json.dumps(info, ensure_ascii=False))
         results[f"ask_{ip}"] = info
         time.sleep(2)
+    section("wspólny schowek (Ctrl+C / Ctrl+V)")
+    try:
+        results["schowek"] = clipboard_test("127.0.0.1", 47800)
+    except Exception as e:
+        import traceback
+        results["schowek"] = {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-1500:]}
+    print(json.dumps(results["schowek"], ensure_ascii=False, indent=1))
     ok = all(v.get("auth") and v.get("frame") for k, v in results.items() if k.startswith("ask_"))
+    ok = ok and all(v is True for k, v in results["schowek"].items())
     ok = ok and results["second_launch"]["first_alive"]
     return finish(app, ok)
 

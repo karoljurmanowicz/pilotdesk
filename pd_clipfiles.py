@@ -61,9 +61,27 @@ if sys.platform == "win32":
     _s.DragQueryFileW.argtypes = [wintypes.HANDLE, wintypes.UINT, wintypes.LPWSTR, wintypes.UINT]
     _s.DragQueryFileW.restype = wintypes.UINT
 
+    _u.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_int,
+                                   ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.HWND, wintypes.HMENU,
+                                   wintypes.HINSTANCE, wintypes.LPVOID]
+    _u.CreateWindowExW.restype = wintypes.HWND
+    import threading as _th
+    _tl = _th.local()
+
+    def _owner():
+        """Niewidoczne okno-właściciel schowka (osobne dla każdego wątku). Bez niego Windows: OpenClipboard(NULL)
+        + EmptyClipboard ustawia „brak właściciela” i SetClipboardData po cichu się nie udaje – pliki skopiowane
+        z drugiego komputera nigdy nie trafiały do schowka."""
+        h = getattr(_tl, "hwnd", None)
+        if not h:
+            h = _u.CreateWindowExW(0, "STATIC", "PilotDesk-schowek", 0, 0, 0, 0, 0, None, None, None, None)
+            _tl.hwnd = h
+        return h
+
     def _open():
-        for _ in range(20):
-            if _u.OpenClipboard(None):
+        owner = _owner()
+        for _ in range(50):
+            if _u.OpenClipboard(owner):
                 return True
             time.sleep(0.02)
         return False
@@ -107,7 +125,8 @@ if sys.platform == "win32":
             return False
         try:
             _u.EmptyClipboard()
-            _u.SetClipboardData(CF_HDROP, _global(dropfiles))
+            if not _u.SetClipboardData(CF_HDROP, _global(dropfiles)):
+                return False
             fmt = _u.RegisterClipboardFormatW("Preferred DropEffect")
             _u.SetClipboardData(fmt, _global(effect))
             return True

@@ -46,8 +46,13 @@ def _set_keyframe(frame):
 class VideoEncoder:
     """Koder H.264 z ustawieniami niskiego opóźnienia (bez klatek B, nagłówki w każdej klatce kluczowej)."""
 
-    def __init__(self, width, height, fps, bitrate):
+    def __init__(self, width, height, fps, bitrate, quality=60):
+        """quality ≥ 80: tryb „ostry tekst” – pełna informacja o kolorze (4:4:4) i stała jakość (CRF) w libx264.
+        bitrate – górny limit (sprzętowe kodery: docelowy) dla tej rozdzielczości."""
         self.w, self.h = width - width % 2, height - height % 2
+        hq = quality >= 80
+        crf = 17 if hq else 22 if quality >= 55 else 26 if quality >= 40 else 30
+        kbps = max(500, int(bitrate) // 1000)
         self.ctx = None
         self.name = None
         last = None
@@ -57,15 +62,20 @@ class VideoEncoder:
             try:
                 ctx = av.CodecContext.create(name, "w")
                 ctx.width, ctx.height = self.w, self.h
-                ctx.pix_fmt = "yuv420p" if name != "h264_mf" else "nv12"
+                ctx.pix_fmt = ("yuv444p" if hq else "yuv420p") if name == "libx264" else (
+                    "nv12" if name == "h264_mf" else "yuv420p")
                 ctx.time_base = Fraction(1, 1000)
                 ctx.framerate = Fraction(int(fps), 1)
-                ctx.bit_rate = int(bitrate)
+                if name != "libx264":
+                    ctx.bit_rate = int(bitrate)
                 ctx.gop_size = int(fps) * 20
                 ctx.max_b_frames = 0
                 if name == "libx264":
-                    ctx.options = {"preset": "ultrafast", "tune": "zerolatency",
-                                   "x264-params": "bframes=0:scenecut=0:repeat-headers=1:rc-lookahead=0:sync-lookahead=0"}
+                    # stała jakość (CRF) z limitem przepływności; 4:4:4 = ostre kolorowe litery
+                    ctx.options = {"preset": "superfast" if hq else "ultrafast", "tune": "zerolatency",
+                                   "crf": str(crf),
+                                   "x264-params": "bframes=0:scenecut=0:repeat-headers=1:rc-lookahead=0:"
+                                                  f"sync-lookahead=0:vbv-maxrate={kbps}:vbv-bufsize={kbps}"}
                 elif name == "h264_mf":
                     ctx.options = {"rate_control": "cbr", "scenario": "display_remoting", "hw_encoding": "1"}
                 elif name == "h264_nvenc":
