@@ -105,7 +105,15 @@ if sys.platform == "win32":
         try:
             h = _u.GetClipboardData(CF_HDROP)
             if not h:
-                _note("hdrop", f"brak plików w schowku (błąd {ctypes.get_last_error()})")
+                err = ctypes.get_last_error()
+                fmts = _formats()
+                _note("hdrop", f"brak plików w schowku (błąd {err}); formaty: {fmts}")
+                if CF_HDROP in [f for f, _n in fmts]:
+                    # format jest, ale Windows nie oddaje danych procesowi SYSTEM – próbujemy przez „FileNameW”
+                    alt = _filename_w()
+                    if alt:
+                        _note("alt", f"pliki odczytane przez FileNameW: {len(alt)}")
+                        return alt
                 return None
             _note("hdrop", "są pliki w schowku")
             n = _s.DragQueryFileW(h, 0xFFFFFFFF, None, 0)
@@ -118,6 +126,40 @@ if sys.platform == "win32":
             return out or None
         finally:
             _u.CloseClipboard()
+
+    _u.EnumClipboardFormats.argtypes = [wintypes.UINT]
+    _u.EnumClipboardFormats.restype = wintypes.UINT
+    _u.GetClipboardFormatNameW.argtypes = [wintypes.UINT, wintypes.LPWSTR, ctypes.c_int]
+    _k.GlobalSize.argtypes = [wintypes.HGLOBAL]
+    _k.GlobalSize.restype = ctypes.c_size_t
+
+    def _formats():
+        """[(numer, nazwa)] formatów w schowku (schowek musi być otwarty)."""
+        out, f = [], 0
+        for _ in range(100):
+            f = _u.EnumClipboardFormats(f)
+            if not f:
+                break
+            buf = ctypes.create_unicode_buffer(128)
+            n = _u.GetClipboardFormatNameW(f, buf, 128)
+            out.append((f, buf.value if n else str(f)))
+        return out
+
+    def _filename_w():
+        """Ścieżka pliku z formatu „FileNameW” (Windows dodaje go przy kopiowaniu plików)."""
+        fmt = _u.RegisterClipboardFormatW("FileNameW")
+        h = _u.GetClipboardData(fmt)
+        if not h:
+            return None
+        p = _k.GlobalLock(h)
+        try:
+            if not p:
+                return None
+            n = _k.GlobalSize(h) // 2
+            path = ctypes.wstring_at(p, n).split("\0")[0]
+            return [path] if path else None
+        finally:
+            _k.GlobalUnlock(h)
 
     def _global(data):
         h = _k.GlobalAlloc(0x0042, len(data))  # GMEM_MOVEABLE | GMEM_ZEROINIT
@@ -139,6 +181,9 @@ if sys.platform == "win32":
                 return False
             fmt = _u.RegisterClipboardFormatW("Preferred DropEffect")
             _u.SetClipboardData(fmt, _global(effect))
+            if paths:  # jak Eksplorator: także „FileNameW” (pierwszy plik)
+                _u.SetClipboardData(_u.RegisterClipboardFormatW("FileNameW"),
+                                    _global((paths[0] + "\0").encode("utf-16-le")))
             return True
         finally:
             _u.CloseClipboard()
